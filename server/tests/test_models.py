@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-import scout
+import select_sites
+import summarise
 from models import (
     MAX_RADIUS_M,
     MIN_RADIUS_M,
@@ -63,8 +64,8 @@ def test_site_rejects_unknown_fields():
 
 
 def test_real_pipeline_output_matches_the_site_model(real_elements):
-    sites = scout.build_site_summaries(real_elements, (51.3224410, -1.8934199))
-    scout.llm_select_geom_candidates(
+    sites = summarise.build_site_summaries(real_elements, (51.3224410, -1.8934199))
+    select_sites.llm_select_geom_candidates(
         "criteria", sites
     )  # heuristic scores (no LLM in tests)
     sites[0]["geometry"] = [{"lat": 51.32, "lon": -1.89}, {"lat": 51.33, "lon": -1.88}]

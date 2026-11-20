@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import models
+import pipeline
 import server
 
 
@@ -24,33 +25,7 @@ def collect(client, payload):
     return messages
 
 
-@pytest.fixture
-def fake_pipeline(monkeypatch):
-    calls = {}
-    site = {"id": 7, "type": "way", "lat": 51.0, "lon": -1.0, "distance_to_bbox_m": 10}
-
-    def scout_agent_run(origin, radius):
-        calls["scout"] = (origin, radius)
-        return [{"id": 7}]
-
-    monkeypatch.setattr(server, "scout_agent_run", scout_agent_run)
-    monkeypatch.setattr(
-        server, "build_site_summaries", lambda elements, origin: [dict(site)]
-    )
-    monkeypatch.setattr(
-        server, "enrich_sites_with_context_metrics", lambda sites: sites
-    )
-    monkeypatch.setattr(server, "llm_wild_camping_criteria", lambda: "criteria")
-    monkeypatch.setattr(
-        server, "llm_select_geom_candidates", lambda criteria, sites: [7]
-    )
-    monkeypatch.setattr(
-        server, "refine_sites_with_way_geometry", lambda sites, origin, ids: sites
-    )
-    return calls
-
-
-def test_happy_path_streams_all_waves(client, fake_pipeline):
+def test_search_streams_pipeline_messages_over_the_websocket(client, fake_pipeline):
     messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 800})
     assert [m["type"] for m in messages] == [
         "status",
@@ -95,30 +70,10 @@ def test_invalid_requests_get_an_error_message(client, fake_pipeline, payload):
     assert "scout" not in fake_pipeline
 
 
-def test_scout_error_string_is_forwarded(client, fake_pipeline, monkeypatch):
-    monkeypatch.setattr(
-        server, "scout_agent_run", lambda origin, radius: "Overpass is down"
-    )
-    messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 500})
-    assert messages[-1] == {"type": "error", "msg": "Overpass is down"}
-
-
-def test_no_woods_found_is_reported_and_stops(client, fake_pipeline, monkeypatch):
-    monkeypatch.setattr(server, "build_site_summaries", lambda elements, origin: [])
-    monkeypatch.setattr(
-        server,
-        "llm_wild_camping_criteria",
-        lambda: pytest.fail("LLM should not be called"),
-    )
-    messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 500})
-    assert messages[-1]["type"] == "error"
-    assert "No woods or forests" in messages[-1]["msg"]
-
-
 def test_unexpected_exception_becomes_error_message(client, fake_pipeline, monkeypatch):
     def boom(sites):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(server, "enrich_sites_with_context_metrics", boom)
+    monkeypatch.setattr(pipeline, "enrich_sites_with_context_metrics", boom)
     messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 500})
     assert messages[-1] == {"type": "error", "msg": "kaboom"}

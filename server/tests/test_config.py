@@ -7,6 +7,9 @@ import pytest
 import config
 from config import Settings
 
+# conftest swaps config.get_settings for an uncached version; keep the real one here.
+cached_get_settings = config.get_settings
+
 
 def test_defaults_when_nothing_is_set(monkeypatch):
     # conftest sets these two for isolation; remove them to see the real defaults.
@@ -84,13 +87,13 @@ def test_secrets_are_not_in_repr(monkeypatch):
 
 def test_get_settings_is_cached_until_cleared(monkeypatch):
     monkeypatch.setenv("PORT", "1111")
-    config.get_settings.cache_clear()
-    assert config.get_settings().port == 1111
+    cached_get_settings.cache_clear()
+    assert cached_get_settings().port == 1111
     monkeypatch.setenv("PORT", "2222")
-    assert config.get_settings().port == 1111
-    config.get_settings.cache_clear()
-    assert config.get_settings().port == 2222
-    config.get_settings.cache_clear()
+    assert cached_get_settings().port == 1111
+    cached_get_settings.cache_clear()
+    assert cached_get_settings().port == 2222
+    cached_get_settings.cache_clear()
 
 
 def test_env_vars_lists_everything_from_env_reads():

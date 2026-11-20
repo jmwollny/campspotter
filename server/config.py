@@ -170,3 +170,12 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.from_env()
+
+
+def configure_logging() -> None:
+    """Root logging for the server (LOG_LEVEL), with timestamps."""
+    logging.basicConfig(
+        level=get_settings().log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        force=True,
+    )

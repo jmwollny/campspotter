@@ -4,9 +4,11 @@ from pathlib import Path
 import pytest
 
 import config
-import scout
+import overpass
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+ORIGIN = (51.0, -1.0)
 
 
 @pytest.fixture(autouse=True)
@@ -22,14 +24,13 @@ def isolate_env(monkeypatch, tmp_path):
         "OVERPASS_QUERY_DEBUG_FILE", str(tmp_path / "overpass_debug.txt")
     )
     # Read settings fresh on every call so tests can change the environment mid-test.
-    monkeypatch.setattr(scout, "get_settings", config.Settings.from_env)
-    config.get_settings.cache_clear()
-    monkeypatch.setattr(scout.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(config, "get_settings", config.Settings.from_env)
+    monkeypatch.setattr(overpass.time, "sleep", lambda _seconds: None)
 
     def no_network(*args, **kwargs):
         raise AssertionError("tests must not make real HTTP requests")
 
-    monkeypatch.setattr(scout.requests, "post", no_network)
+    monkeypatch.setattr(overpass.requests, "post", no_network)
 
 
 @pytest.fixture
@@ -54,3 +55,28 @@ def way(id, tags, minlat, minlon, maxlat, maxlon):
 
 def node(id, tags, lat, lon):
     return {"type": "node", "id": id, "tags": tags, "lat": lat, "lon": lon}
+
+
+@pytest.fixture
+def fake_pipeline(monkeypatch):
+    """Replace every stage the pipeline calls with an instant fake. Returns a call log."""
+    import pipeline
+
+    calls: dict[str, object] = {}
+    site = {"id": 7, "type": "way", "lat": 51.0, "lon": -1.0, "distance_to_bbox_m": 10}
+
+    def scout_agent_run(origin, radius):
+        calls["scout"] = (origin, radius)
+        return [{"id": 7}]
+
+    monkeypatch.setattr(pipeline, "scout_agent_run", scout_agent_run)
+    monkeypatch.setattr(
+        pipeline, "build_site_summaries", lambda elements, origin: [dict(site)]
+    )
+    monkeypatch.setattr(pipeline, "enrich_sites_with_context_metrics", lambda s: s)
+    monkeypatch.setattr(pipeline, "llm_wild_camping_criteria", lambda: "criteria")
+    monkeypatch.setattr(pipeline, "llm_select_geom_candidates", lambda c, s: [7])
+    monkeypatch.setattr(
+        pipeline, "refine_sites_with_way_geometry", lambda s, origin, ids: s
+    )
+    return calls

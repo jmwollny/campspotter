@@ -1,0 +1,189 @@
+import json
+from types import SimpleNamespace
+
+import pytest
+
+import config
+import select_sites
+
+
+def make_candidates():
+    return [
+        {
+            "id": 1,
+            "type": "way",
+            "terrain_description": "natural:wood",
+            "area_m2": 80_000,
+            "distance_to_major_road_m": 600,
+            "distance_to_water_m": 200,
+            "nearby_red_flags": [],
+        },
+        {
+            "id": 2,
+            "type": "way",
+            "terrain_description": "landuse:forest",
+            "area_m2": 2_000,
+            "distance_to_major_road_m": 50,
+            "distance_to_water_m": None,
+            "nearby_red_flags": [],
+        },
+        {
+            "id": 3,
+            "type": "node",
+            "terrain_description": "natural:tree_group",
+            "area_m2": None,
+            "distance_to_major_road_m": None,
+            "distance_to_water_m": None,
+            "nearby_red_flags": [{"type": "BUILDING"}, {"type": "BUILDING"}],
+        },
+    ]
+
+
+def test_heuristic_prefers_big_quiet_woods():
+    sites = make_candidates()
+    scores = [select_sites.compute_heuristic_suitability(s) for s in sites]
+    assert scores[0] > scores[1]
+    assert all(0 <= score <= 100 for score in scores)
+
+
+def test_heuristic_penalises_red_flags_but_not_barriers():
+    base = {"terrain_description": "natural:wood", "nearby_red_flags": []}
+    with_buildings = {**base, "nearby_red_flags": [{"type": "BUILDING"}] * 3}
+    with_barriers = {**base, "nearby_red_flags": [{"type": "BARRIER"}] * 3}
+    assert select_sites.compute_heuristic_suitability(
+        with_buildings
+    ) < select_sites.compute_heuristic_suitability(base)
+    assert select_sites.compute_heuristic_suitability(
+        with_barriers
+    ) == select_sites.compute_heuristic_suitability(base)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('```json\n{"selected_ids": [1]}\n```', {"selected_ids": [1]}),
+        ('Sure! {"a": {"b": 2}} hope that helps', {"a": {"b": 2}}),
+        ("no json here", None),
+        ("{not valid}", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_json_object_from_text(text, expected):
+    assert select_sites.parse_json_object_from_text(text) == expected
+
+
+class FakeLLM:
+    def __init__(self, content=None, error=None):
+        self.content, self.error, self.calls = content, error, []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        message = SimpleNamespace(content=self.content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def use_llm(monkeypatch, fake):
+    monkeypatch.setattr(select_sites, "get_chat_client", lambda: (fake, "fake-model"))
+
+
+def test_select_without_llm_uses_heuristic():
+    sites = make_candidates()
+    selected = select_sites.llm_select_geom_candidates(
+        "criteria", sites, max_candidates=2
+    )
+    assert selected[0] == 1
+    assert len(selected) == 2
+    assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
+
+
+def test_select_normalises_string_ids_and_drops_unknown_ones(monkeypatch):
+    fake = FakeLLM(
+        json.dumps(
+            {
+                "selected_ids": ["3", 999, "1", "3", "abc"],
+                "evaluations": [
+                    {"id": "1", "suitability_score": "85", "reason": "big quiet wood"},
+                    {"id": 3, "suitability_score": 140, "reason": "too high"},
+                    {
+                        "id": 2,
+                        "suitability_score": "n/a",
+                        "reason": "unparseable score",
+                    },
+                ],
+            }
+        )
+    )
+    use_llm(monkeypatch, fake)
+    sites = make_candidates()
+    selected = select_sites.llm_select_geom_candidates("criteria", sites)
+
+    assert selected == [3, 1]
+    by_id = {s["id"]: s for s in sites}
+    assert by_id[1]["suitability_score"] == 85
+    assert by_id[1]["suitability_reason"] == "big quiet wood"
+    assert by_id[3]["suitability_score"] == 100  # clamped
+    assert by_id[2]["suitability_reason"] == "heuristic fallback"
+    prompt = fake.calls[0]["messages"][1]["content"]
+    assert '"nearby_red_flags": {"BUILDING": 2}' in prompt
+
+
+def test_select_falls_back_when_llm_returns_no_valid_ids(monkeypatch):
+    use_llm(
+        monkeypatch, FakeLLM(json.dumps({"selected_ids": [12345], "evaluations": []}))
+    )
+    selected = select_sites.llm_select_geom_candidates(
+        "criteria", make_candidates(), max_candidates=1
+    )
+    assert selected == [1]
+
+
+@pytest.mark.parametrize(
+    "fake",
+    [FakeLLM("I can't answer that"), FakeLLM(error=ConnectionError("ollama down"))],
+)
+def test_select_falls_back_when_llm_fails(monkeypatch, fake):
+    use_llm(monkeypatch, fake)
+    sites = make_candidates()
+    assert select_sites.llm_select_geom_candidates("criteria", sites)[0] == 1
+    assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
+
+
+def test_select_respects_candidate_pool_size(monkeypatch):
+    monkeypatch.setenv("LLM_CANDIDATE_POOL_SIZE", "2")
+    sites = make_candidates()
+    select_sites.llm_select_geom_candidates("criteria", sites)
+    assert "suitability_score" not in sites[2]
+
+
+def test_select_with_no_sites_returns_empty(monkeypatch):
+    fake = FakeLLM("{}")
+    use_llm(monkeypatch, fake)
+    assert select_sites.llm_select_geom_candidates("criteria", []) == []
+    assert fake.calls == []
+
+
+def test_criteria_falls_back_on_error_and_empty_reply(monkeypatch):
+    use_llm(monkeypatch, FakeLLM(error=TimeoutError()))
+    assert select_sites.llm_wild_camping_criteria() == select_sites.DEFAULT_CRITERIA
+    use_llm(monkeypatch, FakeLLM("   "))
+    assert select_sites.llm_wild_camping_criteria() == select_sites.DEFAULT_CRITERIA
+    use_llm(monkeypatch, FakeLLM("- flat ground"))
+    assert select_sites.llm_wild_camping_criteria() == "- flat ground"
+
+
+def test_get_chat_client_selection(monkeypatch):
+    monkeypatch.setenv("LOCAL_LLM_ENABLED", "true")
+    monkeypatch.setenv("OLLAMA_MODEL", "my-model")
+    client, model = select_sites.get_chat_client()
+    assert model == "my-model" and "11434" in str(client.base_url)
+
+    monkeypatch.setenv("LOCAL_LLM_ENABLED", "false")
+    assert select_sites.get_chat_client() == (None, None)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    client, model = select_sites.get_chat_client()
+    assert model == config.DEFAULT_GEMINI_MODEL and "googleapis" in str(client.base_url)
