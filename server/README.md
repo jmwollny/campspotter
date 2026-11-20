@@ -19,9 +19,6 @@ success: Upgraded uv from v0.11.6 to v0.11.7! https://github.com/astral-sh/uv/re
 And now simply run:  
 `uv sync`
 
-Now create the requirements.txt file using the command
-`uv pip compile pyproject.toml -o requirements.txt`
-
 Once this has run successfully you can start the server 
 ```bash
 uv run python server.py
