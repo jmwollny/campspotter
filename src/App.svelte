@@ -16,10 +16,8 @@
     summariseRedFlags,
     trackBounds,
   } from "./lib/geo";
+  import { runSearch, type SearchHandle } from "./lib/searchClient";
   import {
-    applyServerMessage,
-    beginSearch,
-    endSearch,
     loadRoute,
     loadRouteFromUrl,
     moveSearchPoint,
@@ -32,12 +30,11 @@
     searching,
     selectSite as setSelectedSite,
     selectedSiteId,
-    setStatus,
     sites,
     status,
     topPickSet,
   } from "./lib/stores";
-  import type { LatLon, ServerMessage, Site } from "./lib/types";
+  import type { LatLon, Site } from "./lib/types";
   import type { FeatureCollection, GeoJSON } from "geojson";
 
   interface SampleRoute {
@@ -45,8 +42,6 @@
     label: string;
   }
 
-  /** The message of an Error, or the value itself as text. */
-  const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
   const isPresent = <T,>(value: T | null | undefined): value is T => value != null;
 
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -128,55 +123,16 @@
   // Search
   // ---------------------------------------------------------------------------
 
+  let currentSearch: SearchHandle | undefined;
+
   function startSearch() {
     const searchOrigin = get(origin);
-    if (get(searching) || !searchOrigin) return;
+    if (!searchOrigin) return;
     clearPopup();
-    beginSearch();
-    let finished = false;
-
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(`${apiUrl}/ws/analyze`);
-    } catch (error) {
-      endSearch();
-      setStatus(`Invalid server address ${apiUrl}: ${messageOf(error)}`, true);
-      return;
-    }
-
-    socket.onopen = () => {
-      socket.send(
-        JSON.stringify({ lat: searchOrigin.lat, lon: searchOrigin.lon, radius: get(searchRadiusM) }),
-      );
-    };
-
-    socket.onmessage = (event: MessageEvent<string>) => {
-      let data: ServerMessage;
-      try {
-        // Step 12 replaces this cast with a runtime check of the message shape.
-        data = JSON.parse(event.data) as ServerMessage;
-      } catch {
-        return;
-      }
-      const outcome = applyServerMessage(data);
-      if (outcome.done) finished = true;
-      if (outcome.showResults) tick().then(fitToResults);
-    };
-
-    socket.onerror = () => {
-      if (!finished) {
-        setStatus(
-          `Can't reach the Campspotter server at ${apiUrl}. Is it running? (cd server && uv run python server.py)`,
-          true,
-        );
-      }
-      finished = true;
-    };
-
-    socket.onclose = () => {
-      endSearch();
-      if (!finished) setStatus("The server closed the connection before the search finished.", true);
-    };
+    currentSearch = runSearch(
+      { lat: searchOrigin.lat, lon: searchOrigin.lon, radius: get(searchRadiusM) },
+      { apiUrl, onResults: () => tick().then(fitToResults) },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -426,7 +382,10 @@
       mapError = error instanceof Error ? error.message : "Failed to initialise the map.";
     }
 
-    return () => map?.remove();
+    return () => {
+      currentSearch?.cancel();
+      map?.remove();
+    };
   });
 </script>
 
