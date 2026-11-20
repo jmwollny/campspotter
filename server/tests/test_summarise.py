@@ -1,10 +1,10 @@
 import json
 
 import pytest
-from conftest import ORIGIN, node, way
 
 import geo
 import summarise
+from tests.conftest import ORIGIN, node, way
 
 
 @pytest.mark.parametrize(

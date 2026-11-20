@@ -1,7 +1,7 @@
 import pytest
-from conftest import ORIGIN, way
 
 import geo
+from tests.conftest import ORIGIN, way
 
 
 def test_haversine_one_degree_of_latitude():

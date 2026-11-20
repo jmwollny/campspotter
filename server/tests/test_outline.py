@@ -1,9 +1,9 @@
 from typing import Any
 
 import pytest
-from conftest import ORIGIN
 
 import outline
+from tests.conftest import ORIGIN
 
 
 def test_refine_sites_adds_geometry_for_selected_ways_only(monkeypatch):

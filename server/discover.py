@@ -2,12 +2,15 @@
 
 import logging
 
+from models import Coordinate, OsmElement, OverpassResponse
 from overpass import call_overpass_with_retry
 
 logger = logging.getLogger(__name__)
 
 
-def get_camping_and_woods(lat, lon, radius_meters=2000):
+def get_camping_and_woods(
+    lat: float, lon: float, radius_meters: float = 2000
+) -> OverpassResponse | None:
     """Fetch candidate woodland ("targets") and red flags around a point."""
     lat = float(lat)
     lon = float(lon)
@@ -45,7 +48,9 @@ def get_camping_and_woods(lat, lon, radius_meters=2000):
     return call_overpass_with_retry(query)
 
 
-def scout_agent_run(coordinate, radius):
+def scout_agent_run(
+    coordinate: Coordinate | None, radius: float
+) -> list[OsmElement] | str:
     """Return a list of Overpass elements, or an error string for the UI."""
     if not coordinate or any(value is None for value in coordinate):
         return "Error: Invalid coordinate passed from Parser."
@@ -59,15 +64,15 @@ def scout_agent_run(coordinate, radius):
         logger.error("Scout query failed: no response payload returned from Overpass.")
         return "OpenStreetMap (Overpass) is not responding right now. Please try again in a minute."
 
-    if "elements" not in results:
+    elements = results.get("elements")
+    if not isinstance(elements, list):
         logger.error(
             f"Scout query failed: malformed Overpass response keys={list(results.keys())}"
         )
         return "Scout query failed: malformed Overpass response (missing 'elements')."
 
-    element_count = len(results["elements"])
-    logger.info(f"Scout query completed with {element_count} elements.")
-    if element_count == 0:
+    logger.info(f"Scout query completed with {len(elements)} elements.")
+    if not elements:
         return "Nothing found in OpenStreetMap here. Try increasing the search radius."
 
-    return results["elements"]
+    return elements

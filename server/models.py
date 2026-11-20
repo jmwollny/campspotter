@@ -4,7 +4,7 @@ Data shapes shared by the pipeline and the websocket API.
 The front end's src/lib/types.ts mirrors these models; keep the two in sync.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -117,3 +117,18 @@ class ErrorMessage(BaseModel):
 
 
 ServerMessage = StatusMessage | BatchMessage | FinalMessage | ErrorMessage
+
+
+# --------------------------------------------------------------------------- #
+# Plain-dict shapes used inside the pipeline
+# --------------------------------------------------------------------------- #
+# Stages pass dicts along and add keys as they go; BatchMessage/FinalMessage validate
+# them against Site before anything is sent to the browser.
+
+Coordinate = tuple[float, float]  # (lat, lon)
+LatLonDict = dict[str, float]  # {"lat": ..., "lon": ...}
+BoundsDict = dict[str, float]  # {"minlat", "minlon", "maxlat", "maxlon"}
+OsmTags = dict[str, str]  # OpenStreetMap tags, e.g. {"natural": "wood"}
+OsmElement = dict[str, Any]  # one element of an Overpass response
+OverpassResponse = dict[str, Any]  # a whole Overpass JSON payload
+SiteRecord = dict[str, Any]  # a candidate site; see Site for its fields

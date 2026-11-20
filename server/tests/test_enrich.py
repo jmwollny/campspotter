@@ -37,3 +37,12 @@ def test_context_metrics_pick_nearest_road_and_water():
     metrics = enrich.compute_site_context_metrics_from_elements(51.0, -1.0, elements)
     assert metrics["distance_to_major_road_m"] == pytest.approx(111.2, abs=0.5)
     assert metrics["distance_to_water_m"] == pytest.approx(210, abs=2)
+
+
+@pytest.mark.parametrize(
+    "response", [None, {}, {"remark": "busy"}, {"elements": "not a list"}]
+)
+def test_context_fetch_tolerates_bad_overpass_responses(monkeypatch, response):
+    monkeypatch.setattr(enrich, "call_overpass_with_retry", lambda query: response)
+    sites = [{"id": 1, "lat": 51.0, "lon": -1.0}]
+    assert enrich.fetch_context_elements_for_sites(sites) == []

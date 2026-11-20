@@ -1,5 +1,7 @@
 """Stage 2 - summarise: turn OSM elements into candidate sites with nearby red flags."""
 
+from typing import Any
+
 import config
 from geo import (
     calculate_way_area_from_bounds_m2,
@@ -8,11 +10,12 @@ from geo import (
     get_element_coordinate,
     normalize_bounds,
 )
+from models import Coordinate, OsmElement, OsmTags, SiteRecord
 
 TARGET_NATURAL_VALUES = {"wood", "tree_group"}
 
 
-def is_target_site(tags):
+def is_target_site(tags: OsmTags) -> bool:
     """True for woodland/forest (what the target query asks for); everything else is a red flag."""
     if tags.get("amenity") == "school" or tags.get("leisure") == "pitch":
         return False
@@ -23,7 +26,7 @@ def is_target_site(tags):
     )
 
 
-def classify_red_flag(tags):
+def classify_red_flag(tags: OsmTags) -> str:
     """Short label for a red flag, e.g. BARRIER, SCHOOL, RAILWAY, RESIDENTIAL, BUILDING."""
     if "barrier" in tags:
         return "BARRIER"
@@ -35,7 +38,9 @@ def classify_red_flag(tags):
     return "BUILDING"
 
 
-def build_site_summaries(elements, origin_coordinate=None):
+def build_site_summaries(
+    elements: list[OsmElement], origin_coordinate: Coordinate | None = None
+) -> list[SiteRecord]:
     """
     Turn raw Overpass elements into compact candidate-site records, nearest first.
     Each site lists red flags within MIN_DISTANCE_TO_HAZARD metres of the site itself.
@@ -137,7 +142,7 @@ def build_site_summaries(elements, origin_coordinate=None):
     return summaries
 
 
-def site_sort_key(site):
+def site_sort_key(site: SiteRecord) -> tuple[float, float]:
     """Nearest first, then largest first. Missing values sort last."""
     distance = site.get("distance_to_bbox_m")
     area = site.get("area_m2")
@@ -147,7 +152,7 @@ def site_sort_key(site):
     )
 
 
-def summarise_red_flags(hazards):
+def summarise_red_flags(hazards: list[dict[str, Any]] | None) -> dict[str, int]:
     """{'BUILDING': 3, 'BARRIER': 1} style counts, for the LLM prompt."""
     counts: dict[str, int] = {}
     for hazard in hazards or []:

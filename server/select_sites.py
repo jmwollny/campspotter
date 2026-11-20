@@ -4,10 +4,13 @@ import json
 import logging
 import math
 import time
+from typing import Any
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 import config
+from models import SiteRecord
 from summarise import summarise_red_flags
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,7 @@ DEFAULT_CRITERIA = (
 )
 
 
-def compute_heuristic_suitability(site):
+def compute_heuristic_suitability(site: SiteRecord) -> float:
     """Fallback 0-100 suitability score when the LLM is unavailable."""
     score = 50.0
     area_m2 = site.get("area_m2")
@@ -57,7 +60,7 @@ def compute_heuristic_suitability(site):
     return max(0.0, min(100.0, round(score, 1)))
 
 
-def apply_heuristic_scores(sites, max_candidates):
+def apply_heuristic_scores(sites: list[SiteRecord], max_candidates: int) -> list[int]:
     for site in sites:
         site["suitability_score"] = compute_heuristic_suitability(site)
         site["suitability_reason"] = "heuristic fallback"
@@ -65,7 +68,7 @@ def apply_heuristic_scores(sites, max_candidates):
     return [site["id"] for site in ranked[:max_candidates]]
 
 
-def parse_json_object_from_text(text):
+def parse_json_object_from_text(text: str | None) -> dict[str, Any] | None:
     """Extract the outermost {...} JSON object from LLM output (which may include prose/fences)."""
     if not text:
         return None
@@ -80,7 +83,7 @@ def parse_json_object_from_text(text):
     return parsed if isinstance(parsed, dict) else None
 
 
-def to_int_id(value):
+def to_int_id(value: Any) -> int | None:
     """LLMs often echo ids as strings ("123"); normalise to int, or None if not an id."""
     try:
         return int(str(value).strip())
@@ -88,7 +91,7 @@ def to_int_id(value):
         return None
 
 
-def to_score(value):
+def to_score(value: Any) -> float | None:
     try:
         score = float(value)
     except (TypeError, ValueError):
@@ -98,10 +101,10 @@ def to_score(value):
     return max(0.0, min(100.0, score))
 
 
-def get_chat_client():
+def get_chat_client() -> tuple[OpenAI, str] | None:
     """
     Return (client, model): local Ollama when LOCAL_LLM_ENABLED (default), otherwise Gemini
-    when GEMINI_API_KEY is set, otherwise (None, None).
+    when GEMINI_API_KEY is set, otherwise None.
     """
     settings = config.get_settings()
     if settings.local_llm_enabled:
@@ -129,19 +132,20 @@ def get_chat_client():
     logger.info(
         "No LLM configured (LOCAL_LLM_ENABLED is off and GEMINI_API_KEY is missing)."
     )
-    return None, None
+    return None
 
 
-def llm_wild_camping_criteria():
+def llm_wild_camping_criteria() -> str:
     """Ask the LLM for wild camping criteria; fall back to a fixed list on any failure."""
     message = (
         "What is the criteria for a good overnight wild camping spot? Make a bulleted list with no "
         "other text. Ignore any legal considerations because the intention is to arrive late, leave "
         "early and leave no trace."
     )
-    llm_client, llm_model = get_chat_client()
-    if not llm_client:
+    chat = get_chat_client()
+    if chat is None:
         return DEFAULT_CRITERIA
+    llm_client, llm_model = chat
 
     try:
         llm_start = time.perf_counter()
@@ -163,7 +167,9 @@ def llm_wild_camping_criteria():
         return DEFAULT_CRITERIA
 
 
-def llm_select_geom_candidates(criteria, sites, max_candidates=3):
+def llm_select_geom_candidates(
+    criteria: str, sites: list[SiteRecord], max_candidates: int = 3
+) -> list[int]:
     """
     Score the nearest candidate sites (sets suitability_score/suitability_reason on them) and
     return up to `max_candidates` ids to fetch full geometry for.
@@ -172,12 +178,14 @@ def llm_select_geom_candidates(criteria, sites, max_candidates=3):
     if not candidate_sites:
         return []
 
-    llm_client, llm_model = get_chat_client()
+    chat = get_chat_client()
     logger.info(
-        f"Selecting geometry candidates from {len(candidate_sites)} sites using model '{llm_model}'."
+        f"Selecting geometry candidates from {len(candidate_sites)} sites "
+        f"using model '{chat[1] if chat else None}'."
     )
-    if not llm_client:
+    if chat is None:
         return apply_heuristic_scores(candidate_sites, max_candidates)
+    llm_client, llm_model = chat
 
     prompt_payload = [
         {
@@ -192,7 +200,7 @@ def llm_select_geom_candidates(criteria, sites, max_candidates=3):
         }
         for site in candidate_sites
     ]
-    messages = [
+    messages: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
             "content": (
@@ -250,10 +258,14 @@ def llm_select_geom_candidates(criteria, sites, max_candidates=3):
 
     # Only accept ids that were actually offered; LLMs sometimes invent or repeat them.
     candidate_ids = {site.get("id") for site in candidate_sites}
-    selected_ids = []
+    selected_ids: list[int] = []
     for raw_id in parsed.get("selected_ids") or []:
         site_id = to_int_id(raw_id)
-        if site_id in candidate_ids and site_id not in selected_ids:
+        if (
+            site_id is not None
+            and site_id in candidate_ids
+            and site_id not in selected_ids
+        ):
             selected_ids.append(site_id)
 
     if not selected_ids:

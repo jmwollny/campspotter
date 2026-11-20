@@ -178,12 +178,16 @@ def test_criteria_falls_back_on_error_and_empty_reply(monkeypatch):
 def test_get_chat_client_selection(monkeypatch):
     monkeypatch.setenv("LOCAL_LLM_ENABLED", "true")
     monkeypatch.setenv("OLLAMA_MODEL", "my-model")
-    client, model = select_sites.get_chat_client()
+    chat = select_sites.get_chat_client()
+    assert chat is not None
+    client, model = chat
     assert model == "my-model" and "11434" in str(client.base_url)
 
     monkeypatch.setenv("LOCAL_LLM_ENABLED", "false")
-    assert select_sites.get_chat_client() == (None, None)
+    assert select_sites.get_chat_client() is None
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    client, model = select_sites.get_chat_client()
+    chat = select_sites.get_chat_client()
+    assert chat is not None
+    client, model = chat
     assert model == config.DEFAULT_GEMINI_MODEL and "googleapis" in str(client.base_url)

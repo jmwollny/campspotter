@@ -1,15 +1,17 @@
 """Stage 5 - outline: fetch full polygons for the chosen sites."""
 
 import logging
+from collections.abc import Iterable
 
 from geo import nearest_point_on_way_geometry
+from models import Coordinate, LatLonDict, SiteRecord
 from overpass import call_overpass_with_retry
 from select_sites import to_int_id
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_way_geometries(way_ids):
+def fetch_way_geometries(way_ids: list[int]) -> dict[int, list[LatLonDict]]:
     """Fetch full geometry for a list of OSM way ids -> {id: [{lat, lon}, ...]}."""
     if not way_ids:
         return {}
@@ -32,7 +34,11 @@ def fetch_way_geometries(way_ids):
     }
 
 
-def refine_sites_with_way_geometry(sites, origin_coordinate, selected_site_ids):
+def refine_sites_with_way_geometry(
+    sites: list[SiteRecord],
+    origin_coordinate: Coordinate | None,
+    selected_site_ids: Iterable[int | str],
+) -> list[SiteRecord]:
     """Fetch full polygons for the selected ways and refine their nearest-point distance."""
     if not sites or not origin_coordinate or not selected_site_ids:
         return sites
@@ -48,8 +54,10 @@ def refine_sites_with_way_geometry(sites, origin_coordinate, selected_site_ids):
         return sites
 
     for site in sites:
-        way_geometry = geometry_by_id.get(site.get("id"))
-        if site.get("type") != "way" or not way_geometry:
+        if site.get("type") != "way":
+            continue
+        way_geometry = geometry_by_id.get(site["id"])
+        if not way_geometry:
             continue
 
         nearest_point, distance_m = nearest_point_on_way_geometry(

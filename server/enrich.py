@@ -5,12 +5,15 @@ import math
 
 import config
 from geo import get_element_coordinate, haversine_distance_m
+from models import OsmElement, SiteRecord
 from overpass import call_overpass_with_retry
 
 logger = logging.getLogger(__name__)
 
 
-def compute_site_context_metrics_from_elements(lat, lon, elements):
+def compute_site_context_metrics_from_elements(
+    lat: float, lon: float, elements: list[OsmElement]
+) -> dict[str, float | None]:
     """Nearest major road / water distances for one site from pre-fetched elements."""
     distance_to_road = None
     distance_to_water = None
@@ -40,7 +43,9 @@ def compute_site_context_metrics_from_elements(lat, lon, elements):
     }
 
 
-def fetch_context_elements_for_sites(sites, radius_meters=1200):
+def fetch_context_elements_for_sites(
+    sites: list[SiteRecord], radius_meters: float = 1200
+) -> list[OsmElement]:
     """Fetch roads/water once for all candidate sites using a padded bbox query."""
     site_coords = [
         (site["lat"], site["lon"])
@@ -78,17 +83,19 @@ def fetch_context_elements_for_sites(sites, radius_meters=1200):
     out center;
     """
     response = call_overpass_with_retry(query)
-    if not response or "elements" not in response:
+    elements = response.get("elements") if response else None
+    if not isinstance(elements, list):
         logger.warning("Context batch query returned no elements payload.")
         return []
-    elements = response["elements"]
     logger.info(
         f"Context batch query fetched {len(elements)} elements for {len(site_coords)} sites."
     )
     return elements
 
 
-def enrich_sites_with_context_metrics(sites, max_sites=None, radius_meters=1200):
+def enrich_sites_with_context_metrics(
+    sites: list[SiteRecord], max_sites: int | None = None, radius_meters: float = 1200
+) -> list[SiteRecord]:
     """Add road/water distances to the nearest `max_sites` (default: the LLM candidate pool)."""
     max_sites = max_sites or config.get_settings().llm_candidate_pool_size
     target_sites = sites[:max_sites]

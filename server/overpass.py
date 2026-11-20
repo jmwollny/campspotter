@@ -9,6 +9,7 @@ from pathlib import Path
 import requests
 
 import config
+from models import OverpassResponse
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +17,19 @@ logger = logging.getLogger(__name__)
 OVERPASS_USER_AGENT = "campspotter/1.0 (+https://github.com/jmwollny/campspotter)"
 
 
-def get_overpass_mirrors():
+def get_overpass_mirrors() -> list[str]:
     # overpass.kumi.systems is not a default: it often hangs until the read timeout and
     # has returned incomplete results. Add it via OVERPASS_URLS if you want it.
     return list(config.get_settings().overpass_urls)
 
 
-def sleep_with_jitter(min_seconds=0.5, max_seconds=1.5):
+def sleep_with_jitter(min_seconds: float = 0.5, max_seconds: float = 1.5) -> None:
     delay = random.uniform(min_seconds, max_seconds)
     logger.info(f"Waiting {delay:.2f}s before next Overpass mirror retry.")
     time.sleep(delay)
 
 
-def write_overpass_debug_query(text):
+def write_overpass_debug_query(text: str | None) -> None:
     """Append Overpass queries/responses to a file for copy/paste debugging (DEBUG only)."""
     debug_filename = config.get_settings().overpass_query_debug_file
     debug_path = Path(__file__).resolve().parent / debug_filename
@@ -40,7 +41,7 @@ def write_overpass_debug_query(text):
     logger.debug(f"Appended Overpass query to {debug_path}")
 
 
-def call_overpass_with_retry(query):
+def call_overpass_with_retry(query: str) -> OverpassResponse | None:
     """
     POST a query to each Overpass mirror in turn; return the JSON payload or None.
     The public servers often answer 502/429 "at capacity" and ask clients to back off
@@ -71,7 +72,9 @@ def call_overpass_with_retry(query):
     return None
 
 
-def _try_overpass_mirrors(query, mirrors):
+def _try_overpass_mirrors(
+    query: str, mirrors: list[str]
+) -> tuple[OverpassResponse | None, bool]:
     """One pass over the mirrors -> (payload or None, whether retrying could help)."""
     settings = config.get_settings()
     retry_min_delay_s = settings.overpass_retry_min_delay_s

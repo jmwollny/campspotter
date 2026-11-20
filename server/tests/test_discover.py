@@ -22,6 +22,7 @@ def test_scout_query_is_a_single_flat_union(monkeypatch):
     [
         (None, "not responding"),
         ({"remark": "oops"}, "malformed"),
+        ({"elements": "not a list"}, "malformed"),
         ({"elements": []}, "Nothing found"),
     ],
 )

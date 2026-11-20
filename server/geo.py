@@ -1,10 +1,13 @@
 """Geometry helpers: distances, areas and bounding boxes on OSM elements."""
 
 import math
+from collections.abc import Mapping, Sequence
 from itertools import pairwise
 
+from models import BoundsDict, Coordinate, LatLonDict, OsmElement
 
-def get_element_coordinate(element):
+
+def get_element_coordinate(element: OsmElement) -> Coordinate | None:
     """(lat, lon) of an Overpass element from its point, center or bounds; None if unknown."""
     lat, lon = element.get("lat"), element.get("lon")
     if lat is not None and lon is not None:
@@ -23,7 +26,7 @@ def get_element_coordinate(element):
     return None
 
 
-def haversine_distance_m(lat1, lon1, lat2, lon2):
+def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in metres between two coordinates."""
     earth_radius_m = 6371000.0
     lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
@@ -37,17 +40,28 @@ def haversine_distance_m(lat1, lon1, lat2, lon2):
     return earth_radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def clamp(value, minimum, maximum):
+def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(value, maximum))
 
 
-def normalize_bounds(bounds):
+def bounds_values(
+    bounds: Mapping[str, float] | None,
+) -> tuple[float, float, float, float] | None:
+    """(minlat, minlon, maxlat, maxlon) from an Overpass bounds dict, or None if incomplete."""
     if not bounds:
         return None
     minlat, minlon = bounds.get("minlat"), bounds.get("minlon")
     maxlat, maxlon = bounds.get("maxlat"), bounds.get("maxlon")
-    if None in (minlat, minlon, maxlat, maxlon):
+    if minlat is None or minlon is None or maxlat is None or maxlon is None:
         return None
+    return minlat, minlon, maxlat, maxlon
+
+
+def normalize_bounds(bounds: Mapping[str, float] | None) -> BoundsDict | None:
+    values = bounds_values(bounds)
+    if values is None:
+        return None
+    minlat, minlon, maxlat, maxlon = values
     return {
         "minlat": round(minlat, 6),
         "minlon": round(minlon, 6),
@@ -57,17 +71,19 @@ def normalize_bounds(bounds):
 
 
 def distance_to_element_m(
-    origin_lat, origin_lon, element, fallback_lat=None, fallback_lon=None
-):
+    origin_lat: float,
+    origin_lon: float,
+    element: OsmElement,
+    fallback_lat: float | None = None,
+    fallback_lon: float | None = None,
+) -> tuple[float | None, LatLonDict | None]:
     """
     Distance from a point to the nearest point of an element's bounding box (0 if inside),
     falling back to point distance when bounds are unavailable. Returns (metres, {lat, lon}).
     """
-    bounds = element.get("bounds") or {}
-    minlat, minlon = bounds.get("minlat"), bounds.get("minlon")
-    maxlat, maxlon = bounds.get("maxlat"), bounds.get("maxlon")
-
-    if None not in (minlat, minlon, maxlat, maxlon):
+    values = bounds_values(element.get("bounds"))
+    if values is not None:
+        minlat, minlon, maxlat, maxlon = values
         nearest_lat = clamp(origin_lat, minlat, maxlat)
         nearest_lon = clamp(origin_lon, minlon, maxlon)
         distance = haversine_distance_m(
@@ -84,7 +100,9 @@ def distance_to_element_m(
     return None, None
 
 
-def nearest_point_on_way_geometry(origin_lat, origin_lon, geometry):
+def nearest_point_on_way_geometry(
+    origin_lat: float, origin_lon: float, geometry: Sequence[Mapping[str, float]]
+) -> tuple[LatLonDict | None, float | None]:
     """
     Nearest point on a way polyline/polygon to the origin, using a local equirectangular
     projection (accurate enough at these distances). Returns ({lat, lon}, metres).
@@ -131,14 +149,14 @@ def nearest_point_on_way_geometry(origin_lat, origin_lon, geometry):
     )
 
 
-def calculate_way_area_from_bounds_m2(bounds):
+def calculate_way_area_from_bounds_m2(
+    bounds: Mapping[str, float] | None,
+) -> float | None:
     """Fast approximate area (m^2) from an Overpass bounding box (overestimates non-rectangles)."""
-    if not bounds:
+    values = bounds_values(bounds)
+    if values is None:
         return None
-    minlat, minlon = bounds.get("minlat"), bounds.get("minlon")
-    maxlat, maxlon = bounds.get("maxlat"), bounds.get("maxlon")
-    if None in (minlat, minlon, maxlat, maxlon):
-        return None
+    minlat, minlon, maxlat, maxlon = values
 
     mid_lat_rad = math.radians((minlat + maxlat) / 2.0)
     height_m = (maxlat - minlat) * 111320.0
@@ -148,7 +166,7 @@ def calculate_way_area_from_bounds_m2(bounds):
     return height_m * width_m
 
 
-def classify_area_size_band(area_m2):
+def classify_area_size_band(area_m2: float | None) -> str:
     if area_m2 is None:
         return "unknown"
     if area_m2 < 5000:
