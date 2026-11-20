@@ -3,13 +3,15 @@
 import json
 import logging
 import math
-import time
 from typing import Any
 
-from openai import OpenAI
-from openai.types.chat import ChatCompletionMessageParam
-
 import config
+from llm_client import (
+    ChatMessage,
+    LLMUnavailable,
+    complete,
+    parse_json_object_from_text,
+)
 from models import SiteRecord
 from summarise import count_red_flags_by_type
 
@@ -68,21 +70,6 @@ def select_by_heuristic(sites: list[SiteRecord], max_candidates: int) -> list[in
     return [site["id"] for site in ranked[:max_candidates]]
 
 
-def parse_json_object_from_text(text: str | None) -> dict[str, Any] | None:
-    """Extract the outermost {...} JSON object from LLM output (which may include prose/fences)."""
-    if not text:
-        return None
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
 def to_int_id(value: Any) -> int | None:
     """LLMs often echo ids as strings ("123"); normalise to int, or None if not an id."""
     try:
@@ -101,40 +88,6 @@ def to_score(value: Any) -> float | None:
     return max(0.0, min(100.0, score))
 
 
-def get_chat_client() -> tuple[OpenAI, str] | None:
-    """
-    Return (client, model): local Ollama when LOCAL_LLM_ENABLED (default), otherwise Gemini
-    when GEMINI_API_KEY is set, otherwise None.
-    """
-    settings = config.get_settings()
-    if settings.local_llm_enabled:
-        model = settings.ollama_model
-        logger.info(f"Using local Ollama model '{model}'.")
-        client = OpenAI(
-            base_url=settings.ollama_base_url,
-            api_key=settings.ollama_api_key,
-            timeout=settings.llm_timeout_s,
-            max_retries=1,
-        )
-        return client, model
-
-    if settings.gemini_api_key:
-        model = settings.gemini_model
-        logger.info(f"Using Gemini model '{model}'.")
-        client = OpenAI(
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            api_key=settings.gemini_api_key,
-            timeout=settings.llm_timeout_s,
-            max_retries=1,
-        )
-        return client, model
-
-    logger.info(
-        "No LLM configured (LOCAL_LLM_ENABLED is off and GEMINI_API_KEY is missing)."
-    )
-    return None
-
-
 def get_camping_criteria() -> str:
     """Ask the LLM for wild camping criteria; fall back to a fixed list on any failure."""
     message = (
@@ -142,29 +95,18 @@ def get_camping_criteria() -> str:
         "other text. Ignore any legal considerations because the intention is to arrive late, leave "
         "early and leave no trace."
     )
-    chat = get_chat_client()
-    if chat is None:
-        return DEFAULT_CRITERIA
-    llm_client, llm_model = chat
-
     try:
-        llm_start = time.perf_counter()
-        response = llm_client.chat.completions.create(
-            model=llm_model,
-            messages=[{"role": "user", "content": message}],
-            temperature=0.1,
-        )
-        logger.info(
-            f"LLM criteria completed in {time.perf_counter() - llm_start:.2f}s."
-        )
-        content = (response.choices[0].message.content or "").strip()
-        logger.debug(f"LLM response for wild camping criteria: {content}")
-        return content or DEFAULT_CRITERIA
+        content = complete(
+            [{"role": "user", "content": message}], purpose="criteria"
+        ).strip()
+    except LLMUnavailable:
+        return DEFAULT_CRITERIA
     except Exception as exc:
         logger.warning(
             f"LLM criteria retrieval failed ({exc}); using default criteria."
         )
         return DEFAULT_CRITERIA
+    return content or DEFAULT_CRITERIA
 
 
 def score_and_select_sites(
@@ -178,14 +120,7 @@ def score_and_select_sites(
     if not candidate_sites:
         return []
 
-    chat = get_chat_client()
-    logger.info(
-        f"Selecting geometry candidates from {len(candidate_sites)} sites "
-        f"using model '{chat[1] if chat else None}'."
-    )
-    if chat is None:
-        return select_by_heuristic(candidate_sites, max_candidates)
-    llm_client, llm_model = chat
+    logger.info(f"Scoring {len(candidate_sites)} candidate sites.")
 
     prompt_payload = [
         {
@@ -200,7 +135,7 @@ def score_and_select_sites(
         }
         for site in candidate_sites
     ]
-    messages: list[ChatCompletionMessageParam] = [
+    messages: list[ChatMessage] = [
         {
             "role": "system",
             "content": (
@@ -222,23 +157,19 @@ def score_and_select_sites(
             ),
         },
     ]
-    logger.debug(f"LLM select geom candidates prompt: {messages}")
-
     try:
-        llm_start = time.perf_counter()
-        response = llm_client.chat.completions.create(
-            model=llm_model, messages=messages, temperature=0.1
-        )
-        logger.info(
-            f"LLM selection completed in {time.perf_counter() - llm_start:.2f}s."
-        )
-        content = response.choices[0].message.content or ""
-        parsed = parse_json_object_from_text(content)
-        logger.debug(f"LLM response: {parsed}")
-        if not parsed:
-            raise ValueError(f"Could not parse LLM response: {content[:300]}")
+        content = complete(messages, purpose="selection")
+    except LLMUnavailable:
+        return select_by_heuristic(candidate_sites, max_candidates)
     except Exception as exc:
         logger.warning(f"LLM selection failed ({exc}); using heuristic fallback.")
+        return select_by_heuristic(candidate_sites, max_candidates)
+
+    parsed = parse_json_object_from_text(content)
+    if not parsed:
+        logger.warning(
+            f"Could not parse LLM response ({content[:300]!r}); using heuristic fallback."
+        )
         return select_by_heuristic(candidate_sites, max_candidates)
 
     eval_map = {}

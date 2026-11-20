@@ -1,9 +1,12 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 import config
+import llm_client
 import overpass
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -78,3 +81,24 @@ def fake_pipeline(monkeypatch):
     monkeypatch.setattr(pipeline, "score_and_select_sites", lambda c, s: [7])
     monkeypatch.setattr(pipeline, "add_outlines", lambda s, origin, ids: s)
     return calls
+
+
+class FakeLLM:
+    """Stands in for the OpenAI client: returns `content` or raises `error`."""
+
+    def __init__(self, content=None, error=None):
+        self.content, self.error, self.calls = content, error, []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        message = SimpleNamespace(content=self.content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def use_llm(monkeypatch, fake):
+    """Make llm_client talk to `fake` instead of a real provider."""
+    chat = llm_client.ChatClient(cast(Any, fake), "fake-model", "ollama")
+    monkeypatch.setattr(llm_client, "get_chat_client", lambda: chat)

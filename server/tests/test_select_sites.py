@@ -1,10 +1,9 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 
-import config
 import select_sites
+from tests.conftest import FakeLLM, use_llm
 
 
 def make_candidates():
@@ -56,38 +55,6 @@ def test_heuristic_penalises_red_flags_but_not_barriers():
     assert select_sites.heuristic_score(with_barriers) == select_sites.heuristic_score(
         base
     )
-
-
-@pytest.mark.parametrize(
-    "text, expected",
-    [
-        ('```json\n{"selected_ids": [1]}\n```', {"selected_ids": [1]}),
-        ('Sure! {"a": {"b": 2}} hope that helps', {"a": {"b": 2}}),
-        ("no json here", None),
-        ("{not valid}", None),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_parse_json_object_from_text(text, expected):
-    assert select_sites.parse_json_object_from_text(text) == expected
-
-
-class FakeLLM:
-    def __init__(self, content=None, error=None):
-        self.content, self.error, self.calls = content, error, []
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
-
-    def _create(self, **kwargs):
-        self.calls.append(kwargs)
-        if self.error:
-            raise self.error
-        message = SimpleNamespace(content=self.content)
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
-
-
-def use_llm(monkeypatch, fake):
-    monkeypatch.setattr(select_sites, "get_chat_client", lambda: (fake, "fake-model"))
 
 
 def test_select_without_llm_uses_heuristic():
@@ -171,21 +138,3 @@ def test_criteria_falls_back_on_error_and_empty_reply(monkeypatch):
     assert select_sites.get_camping_criteria() == select_sites.DEFAULT_CRITERIA
     use_llm(monkeypatch, FakeLLM("- flat ground"))
     assert select_sites.get_camping_criteria() == "- flat ground"
-
-
-def test_get_chat_client_selection(monkeypatch):
-    monkeypatch.setenv("LOCAL_LLM_ENABLED", "true")
-    monkeypatch.setenv("OLLAMA_MODEL", "my-model")
-    chat = select_sites.get_chat_client()
-    assert chat is not None
-    client, model = chat
-    assert model == "my-model" and "11434" in str(client.base_url)
-
-    monkeypatch.setenv("LOCAL_LLM_ENABLED", "false")
-    assert select_sites.get_chat_client() is None
-
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    chat = select_sites.get_chat_client()
-    assert chat is not None
-    client, model = chat
-    assert model == config.DEFAULT_GEMINI_MODEL and "googleapis" in str(client.base_url)
