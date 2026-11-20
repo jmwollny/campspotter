@@ -16,6 +16,7 @@ import math
 import os
 import random
 import time
+from itertools import pairwise
 from pathlib import Path
 
 import requests
@@ -442,7 +443,7 @@ def site_sort_key(site):
 
 def summarise_red_flags(hazards):
     """{'BUILDING': 3, 'BARRIER': 1} style counts, for the LLM prompt."""
-    counts = {}
+    counts: dict[str, int] = {}
     for hazard in hazards or []:
         counts[hazard["type"]] = counts.get(hazard["type"], 0) + 1
     return counts
@@ -780,7 +781,7 @@ def llm_select_geom_candidates(criteria, sites, max_candidates=3):
     for site in candidate_sites:
         evaluation = eval_map.get(site.get("id"))
         score = to_score(evaluation.get("suitability_score")) if evaluation else None
-        if score is not None:
+        if evaluation and score is not None:
             site["suitability_score"] = score
             site["suitability_reason"] = evaluation.get("reason") or ""
         else:
@@ -960,7 +961,7 @@ def nearest_point_on_way_geometry(origin_lat, origin_lon, geometry):
     min_distance_sq = float("inf")
     nearest_xy = None
 
-    for (x1, y1), (x2, y2) in zip(xy_points, xy_points[1:]):
+    for (x1, y1), (x2, y2) in pairwise(xy_points):
         dx, dy = x2 - x1, y2 - y1
         segment_len_sq = dx * dx + dy * dy
         t = (
@@ -973,6 +974,9 @@ def nearest_point_on_way_geometry(origin_lat, origin_lon, geometry):
         if distance_sq < min_distance_sq:
             min_distance_sq = distance_sq
             nearest_xy = (proj_x, proj_y)
+
+    if nearest_xy is None:  # e.g. NaN coordinates: no segment compared as nearer
+        return None, None
 
     nearest_lat = origin_lat + nearest_xy[1] / meters_per_deg_lat
     nearest_lon = origin_lon + (

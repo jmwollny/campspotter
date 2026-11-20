@@ -16,10 +16,41 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy==2.4.1",
     "pytest>=8.3",
+    "ruff==0.17.4",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-p no:anyio"  # silence a deprecation warning from anyio's plugin; no async tests here
+
+# uv run ruff check .   /   uv run ruff format .
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle errors + pyflakes (ruff's defaults), I: import sorting,
+# UP: modern Python syntax, B: bugbear (likely bugs).
+select = ["E", "F", "I", "UP", "B"]
+# Line length is handled by `ruff format`; long strings/comments it can't wrap are fine.
+ignore = ["E501"]
+
+# uv run mypy
+[tool.mypy]
+python_version = "3.12"
+files = ["."]
+exclude = ['^\.venv/']
+mypy_path = ["tests"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Step 4 of the refactor adds type hints everywhere and then turns on
+# disallow_untyped_defs. Until then, still check the bodies of untyped functions.
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# requests ships no type hints; the types-requests stub package would fix this.
+module = ["requests", "requests.*"]
+ignore_missing_imports = true

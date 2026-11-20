@@ -1,10 +1,11 @@
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from conftest import node, way
 
 import scout
-from conftest import node, way
 
 ORIGIN = (51.0, -1.0)
 
@@ -51,6 +52,12 @@ def test_nearest_point_on_way_geometry_projects_onto_segment():
     point, distance = scout.nearest_point_on_way_geometry(*ORIGIN, geometry)
     assert point == {"lat": 51.001, "lon": -1.0}
     assert distance == pytest.approx(111.32, abs=0.1)
+
+
+def test_nearest_point_on_way_geometry_with_invalid_coordinates():
+    nan = float("nan")
+    geometry = [{"lat": nan, "lon": nan}, {"lat": nan, "lon": nan}]
+    assert scout.nearest_point_on_way_geometry(*ORIGIN, geometry) == (None, None)
 
 
 def test_nearest_point_on_way_geometry_needs_two_points():
@@ -441,7 +448,8 @@ def test_overpass_backs_off_exponentially_when_all_mirrors_are_busy(monkeypatch)
     monkeypatch.setenv("OVERPASS_URLS", "https://a.example")
     monkeypatch.setenv("OVERPASS_MAX_ROUNDS", "4")
     monkeypatch.setenv("OVERPASS_BACKOFF_S", "2")
-    sleeps, attempts = [], []
+    sleeps: list[float] = []
+    attempts: list[str] = []
     monkeypatch.setattr(scout.time, "sleep", sleeps.append)
 
     def fake_post(url, **kwargs):
@@ -458,18 +466,19 @@ def test_overpass_backs_off_exponentially_when_all_mirrors_are_busy(monkeypatch)
 def test_overpass_gives_up_after_max_rounds(monkeypatch):
     monkeypatch.setenv("OVERPASS_URLS", "https://a.example,https://b.example")
     monkeypatch.setenv("OVERPASS_MAX_ROUNDS", "2")
-    attempts = []
-    monkeypatch.setattr(
-        scout.requests,
-        "post",
-        lambda url, **kw: attempts.append(url) or FakeResponse(429),
-    )
+    attempts: list[str] = []
+
+    def fake_post(url, **kwargs):
+        attempts.append(url)
+        return FakeResponse(429)
+
+    monkeypatch.setattr(scout.requests, "post", fake_post)
     assert scout.call_overpass_with_retry("query") is None
     assert len(attempts) == 4
 
 
 def test_scout_query_is_a_single_flat_union(monkeypatch):
-    captured = {}
+    captured: dict[str, str] = {}
     monkeypatch.setattr(
         scout,
         "call_overpass_with_retry",
@@ -551,7 +560,7 @@ def test_refine_sites_adds_geometry_for_selected_ways_only(monkeypatch):
         return {1: [{"lat": 51.001, "lon": -1.001}, {"lat": 51.001, "lon": -0.999}]}
 
     monkeypatch.setattr(scout, "fetch_way_geometries", fake_fetch)
-    sites = [
+    sites: list[dict[str, Any]] = [
         {"id": 1, "type": "way", "distance_to_bbox_m": 500},
         {"id": 2, "type": "node", "distance_to_bbox_m": 50},
         {"id": 3, "type": "way", "distance_to_bbox_m": 70},

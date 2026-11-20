@@ -50,10 +50,13 @@ instead, so a search always completes.
 The public Overpass servers are often busy ("502 at capacity"). The server retries with exponential
 backoff, but a search can still take a minute or two at busy times.
 
-## Tests
+## Tests and checks
 
 ```bash
-uv run pytest
+uv run pytest            # tests
+uv run ruff check .      # lint
+uv run ruff format .     # format
+uv run mypy              # type check
 ```
 
 The tests use a captured Overpass response (`tests/fixtures/`) and a fake LLM, so they need no network
