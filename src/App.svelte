@@ -1,549 +1,437 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import mapboxgl from "mapbox-gl";
-  import togeojson from "@mapbox/togeojson";
-  import * as turf from "@turf/turf";
+  import { gpx as gpxToGeoJSON } from "@tmcw/togeojson";
+  import {
+    circlePolygonFeature,
+    describeTerrain,
+    escapeHtml,
+    featureCollection,
+    formatArea,
+    formatDistance,
+    formatScore,
+    lineLengthKm,
+    lineToNearestPointFeature,
+    pointAlongLine,
+    siteShapeFeature,
+    siteToFeature,
+    sortFinalSites,
+    summariseRedFlags,
+    trackBounds,
+    trackLine,
+  } from "./lib/geo.js";
 
-  let connectionStatus = "Disconnected";
-  let statusMessage = "";
+  const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
+  const apiUrl = (import.meta.env.VITE_API_WS_URL || "ws://localhost:8000").replace(/\/+$/, "");
+  const SAMPLE_ROUTES = [
+    { file: "king-alfreds-way-full-route.gpx", label: "King Alfred's Way" },
+    { file: "GBDIVIDE_v400.gpx", label: "GB Divide" },
+  ];
+  const TOP_PICK_COLOR = "#15803d";
+  const OTHER_SITE_COLOR = "#64748b";
+  const ROUTE_COLOR = "#2563eb";
+
+  // Map
   let mapContainer;
   let map;
   let mapLoaded = false;
-  let errorMessage = "";
-  let loading = true;
-  let selectedSiteId = null;
-  let summaryData = {
-    origin_coordinate: null,
-    search_radius_m: null,
-    refined_candidate_ids: [],
-    sites: [],
-  };
-  let trackData = null; // To store the converted GeoJSON
+  let mapError = "";
+  let scoutMarker;
+  let popup;
+
+  // Route
+  let routeName = "";
+  let routeError = "";
+  let routeLoading = false;
+  let trackData = null;
+  let routeLine = null;
   let trackDistanceKm = 0;
   let searchDistance = 0;
-  let currentCoords = null; // [lng, lat]
-  let scoutMarker;
-  let searchRadiusM = 500; // Default to 500m
-  let currentZoom;
+  let origin = null; // { lat, lon } of the search point
+  let searchRadiusM = 500;
+  let zoomBeforeScrub = null;
 
-  const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
-  const topRankColors = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6"];
-  const colorForRank = (rank) =>
-    rank >= 1 && rank <= 5 ? topRankColors[rank - 1] : "#64748b";
+  // Search
+  let searching = false;
+  let statusMessage = "";
+  let statusIsError = false;
+  let sites = [];
+  let refinedIds = [];
+  let selectedSiteId = null;
+  let listElement;
 
-  // Reactive statement to calculate total distance when trackData changes
-  $: if (trackData) {
-    const line = trackData.features.find(
-      (f) => f.geometry.type === "LineString",
-    );
-    if (line) {
-      trackDistanceKm = turf.length(line, { units: "kilometers" });
-    }
+  $: refinedSet = new Set(refinedIds.map(String));
+  $: selectedKey = selectedSiteId == null ? null : String(selectedSiteId);
+  $: if (mapLoaded) renderLayers(trackData, origin, searchRadiusM, sites, refinedSet, selectedKey);
+
+  const isTopPick = (site) => refinedSet.has(String(site.id));
+
+  function setStatus(message, isError = false) {
+    statusMessage = message;
+    statusIsError = isError;
   }
 
-  function handleSliderStart() {
-    currentZoom = map.getZoom()
-    map.flyTo({
-      center: currentCoords,
-      zoom:12, // Detailed zoom for inspection
-      duration: 300, // Snap it in quickly but smoothly
-      essential: true,
-    });
-  }
-
-  // 1. As the user slides, move the map center but DON'T search
-  function handleSliderMove() {
-    const coords = findCoordsAtDistance(trackData, searchDistance);
-    if (coords) {
-      currentCoords = coords;
-      if (scoutMarker) scoutMarker.setLngLat(currentCoords);
-
-      // Use jumpTo with a FIXED zoom level while moving
-      map.jumpTo({
-        center: currentCoords,
-        // zoom: 12, // A comfortable height to see the track and terrain
-      });
-
-      summaryData.origin_coordinate = {
-        lat: currentCoords[1],
-        lon: currentCoords[0],
-      };
-
-      // Clear the sites so lines don't appear during the drag
-      summaryData.sites = [];
-
-      // We update the data, but we need to tell updateMapData
-      // NOT to move the camera this time.
-      updateMapData(true);
-    }
-  }
-
-  // 2. When they let go, do a nice smooth zoom/fly
-  function handleSliderRelease() {
-    if (currentCoords) {
-      map.flyTo({
-        center: currentCoords,
-        zoom: currentZoom, // Detailed zoom for inspection
-        duration: 800, // Snap it in quickly but smoothly
-        essential: true,
-      });
-
-      // Final data sync
-      updateMapData(true);
-    }
-  }
-
-  const siteToFeature = (site, index) => ({
-    type: "Feature",
-    properties: {
-      id: String(site.id ?? ""),
-      rank: index + 1,
-      type: site.type ?? "",
-      terrain: site.terrain_description ?? "unknown",
-      distance: site.distance_to_bbox_m ?? null,
-      areaBand: site.area_size_band ?? "unknown",
-      area: site.area_m2 ?? null,
-      suitabilityScore: site.suitability_score ?? null,
-      suitabilityReason: site.suitability_reason ?? "",
-      color: colorForRank(index + 1),
-    },
-    geometry: {
-      type: "Point",
-      coordinates: [site.lon, site.lat],
-    },
-  });
-
-  const lineToNearestBBoxFeature = (origin, site, index) => {
-    if (!site.nearest_bbox_point) return null;
-    return {
-      type: "Feature",
-      properties: {
-        id: String(site.id ?? ""),
-        rank: index + 1,
-        color: colorForRank(index + 1),
-      },
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [origin.lon, origin.lat],
-          [site.nearest_bbox_point.lon, site.nearest_bbox_point.lat],
-        ],
-      },
-    };
-  };
-
-  const bboxPolygonFeature = (site) => {
-    if (Array.isArray(site.geometry) && site.geometry.length >= 2) {
-      const coordinates = site.geometry.map((point) => [point.lon, point.lat]);
-      const first = coordinates[0];
-      const last = coordinates[coordinates.length - 1];
-      const isClosed = first[0] === last[0] && first[1] === last[1];
-      if (isClosed && coordinates.length >= 4) {
-        return {
-          type: "Feature",
-          properties: { id: String(site.id ?? "") },
-          geometry: {
-            type: "Polygon",
-            coordinates: [coordinates],
-          },
-        };
-      }
-      return {
-        type: "Feature",
-        properties: { id: String(site.id ?? "") },
-        geometry: {
-          type: "LineString",
-          coordinates,
-        },
-      };
-    }
-
-    if (!site.bounds) return null;
-    const b = site.bounds;
-    return {
-      type: "Feature",
-      properties: { id: String(site.id ?? "") },
-      geometry: {
-        type: "Polygon",
-        coordinates: [
-          [
-            [b.minlon, b.minlat],
-            [b.maxlon, b.minlat],
-            [b.maxlon, b.maxlat],
-            [b.minlon, b.maxlat],
-            [b.minlon, b.minlat],
-          ],
-        ],
-      },
-    };
-  };
-
-  const shapeFeatureForSite = (site) => bboxPolygonFeature(site);
-
-  const circlePolygonFeature = (origin, radiusMeters, steps = 64) => {
-    if (
-      !origin ||
-      origin.lat == null ||
-      origin.lon == null ||
-      !radiusMeters ||
-      radiusMeters <= 0
-    )
-      return null;
-    const earthRadiusM = 6371000;
-    const latRad = (origin.lat * Math.PI) / 180;
-    const lonRad = (origin.lon * Math.PI) / 180;
-    const angularDistance = radiusMeters / earthRadiusM;
-    const ring = [];
-
-    for (let i = 0; i <= steps; i += 1) {
-      const bearing = (2 * Math.PI * i) / steps;
-      const sinLat = Math.sin(latRad);
-      const cosLat = Math.cos(latRad);
-      const sinAng = Math.sin(angularDistance);
-      const cosAng = Math.cos(angularDistance);
-
-      const pointLat = Math.asin(
-        sinLat * cosAng + cosLat * sinAng * Math.cos(bearing),
-      );
-      const pointLon =
-        lonRad +
-        Math.atan2(
-          Math.sin(bearing) * sinAng * cosLat,
-          cosAng - sinLat * Math.sin(pointLat),
-        );
-      ring.push([(pointLon * 180) / Math.PI, (pointLat * 180) / Math.PI]);
-    }
-
-    return {
-      type: "Feature",
-      properties: { radius_m: radiusMeters },
-      geometry: {
-        type: "Polygon",
-        coordinates: [ring],
-      },
-    };
-  };
-
-  const parseSummary = (data) => {
-    const origin = data?.origin_coordinate;
-    const sites = Array.isArray(data?.sites) ? data.sites : [];
-    const refinedCandidateIds = Array.isArray(data?.refined_candidate_ids)
-      ? data.refined_candidate_ids.map((id) => String(id))
-      : [];
-    if (!origin || origin.lat == null || origin.lon == null) {
-      throw new Error(
-        "summary.json is missing origin_coordinate with lat/lon.",
-      );
-    }
-    return {
-      origin_coordinate: origin,
-      search_radius_m:
-        typeof data?.search_radius_m === "number" ? data.search_radius_m : null,
-      refined_candidate_ids: refinedCandidateIds,
-      sites: sites.filter((s) => s.lat != null && s.lon != null),
-    };
-  };
-
-  const fitMapToData = (origin, sites) => {
-    // If there are no sites, don't try to fit the bounds!
-    // This prevents the "zoom jump" while sliding.
-    if (!sites || sites.length === 0) return;
-
-    const bounds = new mapboxgl.LngLatBounds(
-      [origin.lon, origin.lat],
-      [origin.lon, origin.lat],
-    );
-    for (const site of sites) {
-      bounds.extend([site.lon, site.lat]);
-      // ... (rest of your existing loop)
-    }
-    map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-  };
-
-  const zoomToSelectedSite = (site) => {
-    if (!site || !map) return;
-
-    const bounds = new mapboxgl.LngLatBounds(
-      [site.lon, site.lat],
-      [site.lon, site.lat],
-    );
-    let hasExtendedBounds = false;
-
-    if (Array.isArray(site.geometry) && site.geometry.length >= 2) {
-      for (const point of site.geometry) {
-        if (point?.lon != null && point?.lat != null) {
-          bounds.extend([point.lon, point.lat]);
-          hasExtendedBounds = true;
-        }
-      }
-    } else if (site.bounds) {
-      bounds.extend([site.bounds.minlon, site.bounds.minlat]);
-      bounds.extend([site.bounds.maxlon, site.bounds.maxlat]);
-      hasExtendedBounds = true;
-    }
-
-    if (hasExtendedBounds) {
-      map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 700 });
-    } else {
-      map.easeTo({
-        center: [site.lon, site.lat],
-        zoom: 16,
-        duration: 700,
-      });
-    }
-  };
-
-  const updateMapData = (preventCameraMove = false) => {
-    if (!map || !mapLoaded || !summaryData.origin_coordinate) return;
-    const sites = summaryData.sites;
-    const siteFeatures = sites.map((site, index) => siteToFeature(site, index));
-    const lineFeatures = sites
-      .map((site, index) =>
-        lineToNearestBBoxFeature(summaryData.origin_coordinate, site, index),
-      )
-      .filter(Boolean);
-    const bboxFeatures = sites.map(bboxPolygonFeature).filter(Boolean);
-    const selectedSite = sites.find(
-      (site) => String(site.id) === String(selectedSiteId),
-    );
-    const selectedShape = selectedSite
-      ? shapeFeatureForSite(selectedSite)
-      : null;
-    const searchRadiusFeature = circlePolygonFeature(
-      summaryData.origin_coordinate,
-      summaryData.search_radius_m,
-    );
-
-    map
-      .getSource("sites")
-      ?.setData({ type: "FeatureCollection", features: siteFeatures });
-    map
-      .getSource("nearest-lines")
-      ?.setData({ type: "FeatureCollection", features: lineFeatures });
-    map
-      .getSource("site-bboxes")
-      ?.setData({ type: "FeatureCollection", features: bboxFeatures });
-    map.getSource("selected-shape")?.setData({
-      type: "FeatureCollection",
-      features: selectedShape ? [selectedShape] : [],
-    });
-    map.getSource("search-radius")?.setData({
-      type: "FeatureCollection",
-      features: searchRadiusFeature ? [searchRadiusFeature] : [],
-    });
-
-    // ONLY move the camera if we aren't currently sliding
-    if (!preventCameraMove) {
-      if (selectedSite) {
-        zoomToSelectedSite(selectedSite);
-      } else {
-        fitMapToData(summaryData.origin_coordinate, sites);
-      }
-    }
-  };
-
-  function handleRadiusMove() {
-    // Update the data object for the circle polygon
-    summaryData.search_radius_m = searchRadiusM;
-
-    // Refresh the map layers (Redraws the red circle)
-    updateMapData(true);
-  }
-
-  function handleRadiusRelease() {
-    // Optional: You could trigger a re-search here automatically
-    // if you want it to be super responsive.
-  }
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    // 1. CLEAR ALL STATE EXPLICITLY
-    summaryData = {
-      origin_coordinate: null,
-      search_radius_m: searchRadiusM,
-      refined_candidate_ids: [],
-      sites: [],
-    };
-
+  function clearResults() {
+    sites = [];
+    refinedIds = [];
     selectedSiteId = null;
-    statusMessage = ""; // Clear any "Analysis Complete" text
+    popup?.remove();
+  }
 
-    const text = await file.text();
-    const xml = new DOMParser().parseFromString(text, "text/xml");
-    const geojson = togeojson.gpx(xml);
+  // ---------------------------------------------------------------------------
+  // Route loading
+  // ---------------------------------------------------------------------------
+
+  async function handleFileUpload(event) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    loadRoute(await file.text(), file.name);
+  }
+
+  async function loadSampleRoute(sample) {
+    routeLoading = true;
+    try {
+      const response = await fetch(`/${sample.file}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      loadRoute(await response.text(), sample.label);
+    } catch (error) {
+      routeError = `Couldn't load the ${sample.label} sample (${error.message}).`;
+    } finally {
+      routeLoading = false;
+    }
+  }
+
+  function loadRoute(text, name) {
+    routeError = "";
+    let geojson;
+    try {
+      const xml = new DOMParser().parseFromString(text, "application/xml");
+      if (xml.querySelector("parsererror")) throw new Error("it isn't valid GPX/XML");
+      geojson = gpxToGeoJSON(xml);
+    } catch (error) {
+      routeError = `Couldn't read ${name}: ${error.message}.`;
+      return;
+    }
+    const line = trackLine(geojson);
+    if (!line) {
+      routeError = `${name} doesn't contain a track or route to follow.`;
+      return;
+    }
 
     trackData = geojson;
-
-    // 2. Set initial distance and find starting coords
+    routeLine = line;
+    // Same line (and turf maths) for length and position, so the slider's end is the route's end.
+    trackDistanceKm = Math.floor(lineLengthKm(line) * 10) / 10;
+    routeName = name;
     searchDistance = 0;
-    const startCoords = findCoordsAtDistance(trackData, 0);
+    clearResults();
+    setStatus("");
+    moveOriginTo(0);
+    fitToRoute();
+  }
 
-    if (startCoords) {
-      currentCoords = startCoords;
-      summaryData.origin_coordinate = {
-        lat: currentCoords[1],
-        lon: currentCoords[0],
-      };
+  function moveOriginTo(km) {
+    const coords = pointAlongLine(routeLine, km);
+    origin = coords ? { lat: coords[1], lon: coords[0] } : null;
+  }
 
-      if (scoutMarker) {
-        scoutMarker.setLngLat(currentCoords);
-      }
+  // ---------------------------------------------------------------------------
+  // Search point controls
+  // ---------------------------------------------------------------------------
+
+  function beginScrub() {
+    if (!map || !origin) return;
+    zoomBeforeScrub = map.getZoom();
+    map.flyTo({ center: [origin.lon, origin.lat], zoom: Math.max(zoomBeforeScrub, 12), duration: 300 });
+  }
+
+  function handleDistanceInput() {
+    moveOriginTo(searchDistance);
+    if (sites.length || statusMessage) {
+      clearResults();
+      setStatus("");
     }
+    if (map && origin) map.jumpTo({ center: [origin.lon, origin.lat] });
+  }
 
-    if (map && mapLoaded) {
-      if (map.getSource("gpx-track")) {
-        map.getSource("gpx-track").setData(trackData);
-      } else {
-        addTrackLayer();
-      }
-
-      // Fit map to the new track
-      const bounds = new mapboxgl.LngLatBounds();
-      geojson.features.forEach((f) => {
-        if (f.geometry.type === "LineString") {
-          f.geometry.coordinates.forEach((coord) => bounds.extend(coord));
-        }
-      });
-      map.fitBounds(bounds, { padding: 50 });
-
-      // 3. REFRESH THE MAP
-      // This will effectively "wipe" the old dots and lines from the map layers
-      updateMapData(true);
+  function endScrub() {
+    // Only zoom back out if the drag started with the pointer (keyboard changes never zoomed in).
+    if (map && origin && zoomBeforeScrub != null) {
+      map.flyTo({ center: [origin.lon, origin.lat], zoom: zoomBeforeScrub, duration: 800 });
     }
-  };
+    zoomBeforeScrub = null;
+  }
 
-  const addTrackLayer = () => {
-    map.addSource("gpx-track", { type: "geojson", data: trackData });
-    map.addLayer(
-      {
-        id: "gpx-track-layer",
-        type: "line",
-        source: "gpx-track",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": "#3b82f6",
-          "line-width": 4,
-          // "line-dasharray": [2, 1],
-        },
-      },
-      "sites",
-    ); // Layer ID "sites" ensures track stays underneath the site markers
-  };
+  // ---------------------------------------------------------------------------
+  // Search
+  // ---------------------------------------------------------------------------
 
-  /**
-   * Finds the coordinates at a specific distance along a GeoJSON LineString
-   * @param {Object} geojson - The GeoJSON FeatureCollection from your GPX
-   * @param {number} targetKm - Distance in kilometers
-   * @returns {[number, number] | null} [lng, lat] or null
-   */
-  const findCoordsAtDistance = (geojson, targetKm) => {
-    // 1. Get all LineStrings
-    const lines = geojson.features.filter(
-      (f) => f.geometry && f.geometry.type === "LineString",
-    );
-    if (lines.length === 0) return null;
+  function startSearch() {
+    if (searching || !origin) return;
+    clearResults();
+    searching = true;
+    setStatus("Connecting to the Campspotter server…");
+    let finished = false;
 
-    // 2. Flatten EVERY coordinate from EVERY segment into one single array
-    // This removes the extra nesting that causes the Turf error
-    const allCoords = lines.flatMap((line) =>
-      line.geometry.coordinates.map((coord) => [
-        Number(coord[0]),
-        Number(coord[1]),
-      ]),
-    );
-
-    // 3. Basic validation: do we have actual numbers?
-    if (allCoords.length < 2 || isNaN(allCoords[0][0])) {
-      console.error("Invalid coordinate data found");
-      return null;
-    }
-
+    let socket;
     try {
-      // 4. Create a simple LineString (one level of nesting less than MultiLineString)
-      const simpleLine = turf.lineString(allCoords);
-
-      // 5. Calculate point along
-      const point = turf.along(simpleLine, targetKm, { units: "kilometers" });
-
-      return point.geometry.coordinates;
-    } catch (err) {
-      console.error("Turf Error:", err.message);
-      return null;
+      socket = new WebSocket(`${apiUrl}/ws/analyze`);
+    } catch (error) {
+      searching = false;
+      setStatus(`Invalid server address ${apiUrl}: ${error.message}`, true);
+      return;
     }
-  };
-
-  async function connectAndAnalyze(lat, lon, radius) {
-    if (connectionStatus === "Connected") return;
-
-    // Clear old results before starting a new search
-    summaryData.sites = [];
-    summaryData.refined_candidate_ids = [];
-    connectionStatus = "Connected";
-
-    const socket = new WebSocket("ws://localhost:8000/ws/analyze");
 
     socket.onopen = () => {
-      console.log("WebSocket connected. Sending search params...");
-      socket.send(JSON.stringify({ lat, lon, radius }));
+      socket.send(JSON.stringify({ lat: origin.lat, lon: origin.lon, radius: searchRadiusM }));
     };
 
     socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
       if (data.type === "status") {
-        statusMessage = data.msg;
+        setStatus(data.msg);
+      } else if (data.type === "batch") {
+        const firstBatch = sites.length === 0;
+        sites = data.sites ?? [];
+        if (firstBatch) fitToResults();
+      } else if (data.type === "final") {
+        refinedIds = data.refined_ids ?? [];
+        sites = sortFinalSites(data.sites ?? [], refinedIds);
+        finished = true;
+        tick().then(fitToResults);
+      } else if (data.type === "error") {
+        setStatus(data.msg, true);
+        finished = true;
       }
+    };
 
-      if (data.type === "batch") {
-        // Wave 1 & 2: Update the sites list
-        // This merges new enrichment data into existing sites or adds new ones
-        summaryData.sites = data.sites;
-        updateMapData(false);
+    socket.onerror = () => {
+      if (!finished) {
+        setStatus(
+          `Can't reach the Campspotter server at ${apiUrl}. Is it running? (cd server && uv run python server.py)`,
+          true,
+        );
       }
-
-      if (data.type === "final") {
-        const refinedSet = new Set(data.refined_ids.map((id) => String(id)));
-
-        // Sort: Refined sites first, then by suitability score descending
-        summaryData.sites = data.sites.sort((a, b) => {
-          const aIsRefined = refinedSet.has(String(a.id));
-          const bIsRefined = refinedSet.has(String(b.id));
-
-          if (aIsRefined && !bIsRefined) return -1;
-          if (!aIsRefined && bIsRefined) return 1;
-
-          // If both are refined (or both aren't), sort by score
-          return (b.suitability_score || 0) - (a.suitability_score || 0);
-        });
-
-        summaryData.refined_candidate_ids = data.refined_ids;
-        updateMapData(false);
-      }
-
-      if (data.type === "error") {
-        console.error("Backend error:", data.msg);
-        statusMessage = "Error: " + data.msg;
-      }
+      finished = true;
     };
 
     socket.onclose = () => {
-      connectionStatus = "Disconnected";
-      console.log("WebSocket closed.");
-    };
-
-    socket.onerror = (error) => {
-      console.error("WebSocket error:", error);
-      connectionStatus = "Disconnected";
-      statusMessage = "Connection failed.";
+      searching = false;
+      if (!finished) setStatus("The server closed the connection before the search finished.", true);
     };
   }
 
-  onMount(async () => {
+  // ---------------------------------------------------------------------------
+  // Map
+  // ---------------------------------------------------------------------------
+
+  function setSourceData(id, data) {
+    map?.getSource(id)?.setData(data);
+  }
+
+  function renderLayers(track, searchOrigin, radius, siteList, topPicks, selected) {
+    setSourceData("gpx-track", track ?? featureCollection([]));
+
+    const isTop = (site) => topPicks.has(String(site.id));
+    setSourceData(
+      "sites",
+      featureCollection(
+        siteList.map((site, index) =>
+          siteToFeature(site, index, { topPick: isTop(site), selected: String(site.id) === selected }),
+        ),
+      ),
+    );
+    // Lines from the route only to the top picks (and the selected site) to avoid a cluttered fan.
+    setSourceData(
+      "nearest-lines",
+      featureCollection(
+        siteList
+          .map((site, index) =>
+            isTop(site) || String(site.id) === selected
+              ? lineToNearestPointFeature(searchOrigin, site, index)
+              : null,
+          )
+          .filter(Boolean),
+      ),
+    );
+    setSourceData("site-shapes", featureCollection(siteList.map(siteShapeFeature).filter(Boolean)));
+    const selectedSite = siteList.find((site) => String(site.id) === selected);
+    const selectedShape = selectedSite ? siteShapeFeature(selectedSite) : null;
+    setSourceData("selected-shape", featureCollection(selectedShape ? [selectedShape] : []));
+    const circle = circlePolygonFeature(searchOrigin, radius);
+    setSourceData("search-radius", featureCollection(circle ? [circle] : []));
+
+    if (scoutMarker) {
+      if (searchOrigin) scoutMarker.setLngLat([searchOrigin.lon, searchOrigin.lat]).addTo(map);
+      else scoutMarker.remove();
+    }
+  }
+
+  function fitToRoute() {
+    const bounds = trackBounds(trackData);
+    if (map && bounds) map.fitBounds(bounds, { padding: 50, duration: 800 });
+  }
+
+  function fitToResults() {
+    if (!map || !origin || sites.length === 0) return;
+    const focus = sites.some(isTopPick) ? sites.filter(isTopPick) : sites;
+    const bounds = new mapboxgl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
+    for (const site of focus) bounds.extend([site.lon, site.lat]);
+    map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
+  }
+
+  function zoomToSite(site) {
+    const shape = siteShapeFeature(site);
+    const points =
+      shape?.geometry.type === "Polygon" ? shape.geometry.coordinates[0] : (shape?.geometry.coordinates ?? []);
+    if (points.length) {
+      const bounds = new mapboxgl.LngLatBounds(points[0], points[0]);
+      for (const point of points) bounds.extend(point);
+      map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 700 });
+    } else {
+      map.easeTo({ center: [site.lon, site.lat], zoom: 16, duration: 700 });
+    }
+  }
+
+  function popupHtml(site, rank) {
+    const { kind, name } = describeTerrain(site.terrain_description);
+    const reason =
+      site.suitability_reason && site.suitability_reason !== "heuristic fallback" ? site.suitability_reason : "";
+    const flags = summariseRedFlags(site.nearby_red_flags);
+    const rows = [
+      ["Score", formatScore(site.suitability_score)],
+      ["From route", formatDistance(site.distance_to_bbox_m)],
+      ["Area", `${formatArea(site.area_m2)} (${site.area_size_band ?? "unknown"})`],
+      ["Water", formatDistance(site.distance_to_water_m)],
+      ["Major road", formatDistance(site.distance_to_major_road_m)],
+      ["Nearby", flags || "no red flags"],
+    ];
+    const osmType = ["node", "way", "relation"].includes(site.type) ? site.type : null;
+    return `
+      <div class="popup">
+        <strong>${rank}. ${escapeHtml(name || kind)}</strong>
+        ${name ? `<div class="popup-kind">${escapeHtml(kind)}</div>` : ""}
+        <dl>${rows.map(([label, value]) => `<dt>${label}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>
+        ${reason ? `<p class="popup-reason">“${escapeHtml(reason)}”</p>` : ""}
+        ${
+          osmType
+            ? `<a href="https://www.openstreetmap.org/${osmType}/${encodeURIComponent(site.id)}" target="_blank" rel="noopener noreferrer">View on OpenStreetMap ↗</a>`
+            : ""
+        }
+      </div>`;
+  }
+
+  async function selectSite(site, { fromMap = false } = {}) {
+    if (!site || !map) return;
+    selectedSiteId = site.id;
+    const rank = sites.indexOf(site) + 1;
+    popup?.remove();
+    popup = new mapboxgl.Popup({ maxWidth: "280px", offset: 10 })
+      .setLngLat([site.lon, site.lat])
+      .setHTML(popupHtml(site, rank))
+      .addTo(map);
+    if (fromMap) {
+      await tick();
+      listElement?.querySelector(`[data-site-id="${CSS.escape(String(site.id))}"]`)?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+    } else {
+      zoomToSite(site);
+    }
+  }
+
+  function addLayers() {
+    const empty = featureCollection([]);
+    for (const id of ["search-radius", "gpx-track", "site-shapes", "selected-shape", "nearest-lines", "sites"]) {
+      map.addSource(id, { type: "geojson", data: empty });
+    }
+
+    map.addLayer({
+      id: "search-radius-fill",
+      type: "fill",
+      source: "search-radius",
+      paint: { "fill-color": "#f43f5e", "fill-opacity": 0.08 },
+    });
+    map.addLayer({
+      id: "search-radius-line",
+      type: "line",
+      source: "search-radius",
+      paint: { "line-color": "#f43f5e", "line-width": 1.5, "line-opacity": 0.7, "line-dasharray": [2, 2] },
+    });
+    map.addLayer({
+      id: "gpx-track-layer",
+      type: "line",
+      source: "gpx-track",
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: { "line-color": ROUTE_COLOR, "line-width": 4, "line-opacity": 0.85 },
+    });
+    map.addLayer({
+      id: "site-shapes-line",
+      type: "line",
+      source: "site-shapes",
+      paint: { "line-color": "#0f766e", "line-width": 1, "line-opacity": 0.45 },
+    });
+    map.addLayer({
+      id: "selected-shape-fill",
+      type: "fill",
+      source: "selected-shape",
+      paint: { "fill-color": TOP_PICK_COLOR, "fill-opacity": 0.18 },
+    });
+    map.addLayer({
+      id: "selected-shape-line",
+      type: "line",
+      source: "selected-shape",
+      paint: { "line-color": "#0f172a", "line-width": 2.5 },
+    });
+    map.addLayer({
+      id: "nearest-lines",
+      type: "line",
+      source: "nearest-lines",
+      paint: { "line-color": "#0f172a", "line-width": 1.5, "line-opacity": 0.6, "line-dasharray": [1, 1.5] },
+    });
+    map.addLayer({
+      id: "sites",
+      type: "circle",
+      source: "sites",
+      paint: {
+        "circle-radius": ["case", ["get", "selected"], 12, ["get", "topPick"], 10, 8],
+        "circle-color": ["case", ["get", "topPick"], TOP_PICK_COLOR, OTHER_SITE_COLOR],
+        "circle-stroke-width": ["case", ["get", "selected"], 3, 1.5],
+        "circle-stroke-color": ["case", ["get", "selected"], "#0f172a", "#ffffff"],
+      },
+    });
+    map.addLayer({
+      id: "site-labels",
+      type: "symbol",
+      source: "sites",
+      layout: {
+        "text-field": ["to-string", ["get", "rank"]],
+        "text-size": 11,
+        "text-font": ["DIN Pro Bold", "Arial Unicode MS Bold"],
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: { "text-color": "#ffffff" },
+    });
+
+    map.on("click", "sites", (event) => {
+      const id = event.features?.[0]?.properties?.id;
+      const site = sites.find((candidate) => String(candidate.id) === String(id));
+      if (site) selectSite(site, { fromMap: true });
+    });
+    map.on("mouseenter", "sites", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "sites", () => (map.getCanvas().style.cursor = ""));
+  }
+
+  onMount(() => {
     if (!mapboxToken) {
-      errorMessage = "Missing VITE_MAPBOX_TOKEN. Add it to mapper/.env.";
-      loading = false;
+      mapError = "Missing VITE_MAPBOX_TOKEN. Add it to a .env file in the project root (see README).";
       return;
     }
 
@@ -552,289 +440,157 @@
       map = new mapboxgl.Map({
         container: mapContainer,
         style: "mapbox://styles/mapbox/outdoors-v12",
-        center: [-4.992869, 50.31721],
-        zoom: 10,
+        center: [-1.6, 51.2],
+        zoom: 7,
       });
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+      map.addControl(new mapboxgl.ScaleControl({ unit: "metric" }), "bottom-left");
+      if (import.meta.env.DEV) /** @type {any} */ (window).__map = map; // handy for debugging and UI scripts
 
       map.on("load", () => {
-        scoutMarker = new mapboxgl.Marker({ color: "#3b82f6" })
-          .setLngLat([0, 0])
-          .addTo(map);
-
-        const sites = summaryData.sites;
-        const siteFeatures = sites.map((site, index) =>
-          siteToFeature(site, index),
-        );
-        const lineFeatures = sites
-          .map((site, index) =>
-            lineToNearestBBoxFeature(
-              summaryData.origin_coordinate,
-              site,
-              index,
-            ),
-          )
-          .filter(Boolean);
-        const bboxFeatures = sites.map(bboxPolygonFeature).filter(Boolean);
-        const searchRadiusFeature = circlePolygonFeature(
-          summaryData.origin_coordinate,
-          summaryData.search_radius_m,
-        );
-        map.addSource("sites", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: siteFeatures },
-        });
-        map.addSource("nearest-lines", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: lineFeatures },
-        });
-        map.addSource("site-bboxes", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: bboxFeatures },
-        });
-        map.addSource("selected-shape", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-        });
-        map.addSource("search-radius", {
-          type: "geojson",
-          data: {
-            type: "FeatureCollection",
-            features: searchRadiusFeature ? [searchRadiusFeature] : [],
-          },
-        });
-
-        map.addLayer({
-          id: "search-radius-fill",
-          type: "fill",
-          source: "search-radius",
-          paint: { "fill-color": "#f43f5e", "fill-opacity": 0.08 },
-        });
-        map.addLayer({
-          id: "search-radius-line",
-          type: "line",
-          source: "search-radius",
-          paint: {
-            "line-color": "#f43f5e",
-            "line-width": 2,
-            "line-opacity": 0.75,
-          },
-        });
-        map.addLayer({
-          id: "site-bboxes-line",
-          type: "line",
-          source: "site-bboxes",
-          paint: {
-            "line-color": "#00bcd4",
-            "line-width": 1.5,
-            "line-opacity": 0.7,
-          },
-        });
-        map.addLayer({
-          id: "selected-shape-line",
-          type: "line",
-          source: "selected-shape",
-          paint: { "line-color": "red", "line-width": 5, "line-opacity": 0.95 },
-        });
-        map.addLayer({
-          id: "nearest-lines",
-          type: "line",
-          source: "nearest-lines",
-          paint: {
-            "line-color": ["coalesce", ["get", "color"], "#ffd54f"],
-            "line-width": 2,
-            "line-opacity": 0.8,
-          },
-        });
-        map.addLayer({
-          id: "sites",
-          type: "circle",
-          source: "sites",
-          paint: {
-            "circle-radius": 6,
-            "circle-color": ["coalesce", ["get", "color"], "#00e676"],
-            "circle-stroke-width": 1,
-            "circle-stroke-color": "#0f172a",
-          },
-        });
-
-        map.on("click", "sites", (event) => {
-          const feature = event.features?.[0];
-          if (!feature) return;
-          const [lng, lat] = feature.geometry.coordinates.slice();
-          const properties = feature.properties ?? {};
-          selectedSiteId = properties.id ?? null;
-          new mapboxgl.Popup()
-            .setLngLat([lng, lat])
-            .setHTML(
-              `
-              <strong>Rank ${properties.rank ?? "?"}: Site ${properties.id ?? ""}</strong><br/>
-              ${properties.terrain ?? ""}<br/>
-              Suitability: ${properties.suitabilityScore ?? "n/a"} / 100<br/>
-              Reason: ${properties.suitabilityReason || "n/a"}<br/>
-              Distance: ${properties.distance ?? "n/a"} m<br/>
-              Area: ${properties.area ?? "n/a"} m² (${properties.areaBand ?? "unknown"})
-            `,
-            )
-            .addTo(map);
-        });
-
-        map.on("mouseenter", "sites", () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", "sites", () => {
-          map.getCanvas().style.cursor = "";
-        });
-
-        fitMapToData(summaryData.origin_coordinate, sites);
+        scoutMarker = new mapboxgl.Marker({ color: ROUTE_COLOR });
+        addLayers();
         mapLoaded = true;
-        loading = false;
+        if (trackData) fitToRoute(); // route was picked before the map finished loading
+      });
+      map.on("error", (event) => {
+        if (/** @type {any} */ (event?.error)?.status === 401) mapError = "Mapbox rejected the access token (VITE_MAPBOX_TOKEN).";
       });
     } catch (error) {
-      errorMessage =
-        error instanceof Error ? error.message : "Failed to initialize map.";
-      loading = false;
+      mapError = error instanceof Error ? error.message : "Failed to initialise the map.";
     }
 
-    return () => {
-      if (map) map.remove();
-    };
+    return () => map?.remove();
   });
-
-  $: if (mapLoaded) {
-    // We reference these to trigger the update
-    summaryData.sites;
-    selectedSiteId;
-    summaryData.search_radius_m;
-
-    // Crucial change: pass 'true' to PREVENT the camera from jumping
-    // while data is streaming in. Only move camera when a site is clicked.
-    updateMapData(selectedSiteId ? false : true);
-  }
 </script>
 
-<main>
-  <h1>Wild Camping Mapper</h1>
-  <div class="status">
-    <button
-      class="primary-btn"
-      on:click={() =>
-        connectAndAnalyze(currentCoords[1], currentCoords[0], searchRadiusM)}
-      disabled={connectionStatus === "Connected" || !trackData}
-    >Search this area
-    </button>
-    <br/>
-    <div class="message">
-      {#if connectionStatus === "Connected"}
-        <span class="spinner"></span>
-      {/if}
-      <span>{statusMessage}</span>
-    </div>
-  </div>
+<div class="app">
+  <header class="app-header">
+    <h1>Campspotter</h1>
+    <p>Find quiet woodland for a wild camp along your route.</p>
+  </header>
+
   <div class="layout">
-    <div class="map" bind:this={mapContainer}></div>
-    <aside class="panel">
-      <h2>Route Track</h2>
-      <input type="file" accept=".gpx" on:change={handleFileUpload} />
-      <hr />
-      {#if trackData}
-        <div class="search-control">
-          <h3>Route Scout</h3>
-          <p>Distance: {searchDistance.toFixed(2)} km</p>
-
-          <input
-            type="range"
-            min="0"
-            max={trackDistanceKm}
-            step="0.1"
-            bind:value={searchDistance}
-            on:mousedown={handleSliderStart}
-            on:touchstart={handleSliderStart}
-            on:input={handleSliderMove}
-            on:change={handleSliderRelease}
-            on:mouseup={handleSliderRelease}
-          />
-        </div>
-        <h3>Search Radius</h3>
-        <p>
-          Radius: {searchRadiusM} meters ({(searchRadiusM / 1000).toFixed(1)} km)
-        </p>
-
-        <input
-          type="range"
-          min="100"
-          max="2000"
-          step="50"
-          bind:value={searchRadiusM}
-          on:input={handleRadiusMove}
-          on:change={handleRadiusRelease}
-        />
-        <hr />
+    <div class="map-wrap">
+      <div class="map" bind:this={mapContainer}></div>
+      {#if mapError}
+        <div class="map-overlay error-text" role="alert">{mapError}</div>
+      {:else if !trackData}
+        <div class="map-overlay">Load a GPX route to get started.</div>
       {/if}
-      {#if loading}
-        <p>Loading map and summary data...</p>
-      {:else if errorMessage}
-        <p class="error">{errorMessage}</p>
-      {:else}
-        <h2>Ranked Sites</h2>
-        <ul>
-          {#each summaryData.sites as site, i (site.id)}
-            {@const isRefined = summaryData.refined_candidate_ids.includes(
-              site.id,
-            )}
-            <!-- svelte-ignore a11y-click-events-have-key-events -->
-            <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-            <li
-              class:selected={String(site.id) === String(selectedSiteId)}
-              class:refined-highlight={isRefined}
-              on:click={() => (selectedSiteId = site.id)}
-              style={`
-                background: ${isRefined ? colorForRank(i + 1) + "15" : "#f8fafc"};
-                border-left: 5px solid ${colorForRank(i + 1)};
-                padding: 12px;
-                margin-bottom: 10px;
-                border-radius: 8px;
-                cursor: pointer;
-                transition: all 0.2s ease;
-                box-shadow: ${isRefined ? "0 2px 8px rgba(0,0,0,0.05)" : "none"};
-              `}
+    </div>
+
+    <aside class="panel">
+      <section class="panel-section">
+        <h2>1. Route</h2>
+        <label class="file-button">
+          <input type="file" accept=".gpx,application/gpx+xml" on:change={handleFileUpload} />
+          Choose GPX file…
+        </label>
+        <p class="hint">
+          or try
+          {#each SAMPLE_ROUTES as sample, i}
+            {#if i > 0}&nbsp;or&nbsp;{/if}<button
+              type="button"
+              class="link-button"
+              disabled={routeLoading}
+              on:click={() => loadSampleRoute(sample)}>{sample.label}</button
             >
-              <div
-                style="display: flex; justify-content: space-between; align-items: start;"
-              >
-                <div>
-                  {#if isRefined}
-                    <span class="badge">TOP PICK</span>
-                  {/if}
-                  <p>#{site.id}</p>
-                  <strong style="display: block; margin-top: 4px;">
-                    {site.terrain_description.replace("natural:", "")}
-                  </strong>
-                </div>
-                <div style="text-align: right;display:flex;">
-                  <span
-                    class="score-pill"
-                    style={`background: ${colorForRank(i + 1)}`}
-                  >
-                    {#if connectionStatus === "Connected"}
-                      <span class="spinner"></span>Calculating score...
-                    {:else}
-                      {site.suitability_score}%
+          {/each}
+        </p>
+        {#if routeError}
+          <p class="error-text" role="alert">{routeError}</p>
+        {:else if routeName}
+          <p class="route-name"><strong>{routeName}</strong> · {trackDistanceKm.toFixed(1)} km</p>
+        {/if}
+      </section>
+
+      {#if trackData}
+        <section class="panel-section">
+          <h2>2. Search point</h2>
+          <label class="slider">
+            <span class="slider-label">
+              Distance along route
+              <output>{searchDistance.toFixed(1)} / {trackDistanceKm.toFixed(1)} km</output>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max={trackDistanceKm}
+              step="0.1"
+              bind:value={searchDistance}
+              disabled={searching}
+              on:pointerdown={beginScrub}
+              on:input={handleDistanceInput}
+              on:change={endScrub}
+            />
+          </label>
+          <label class="slider">
+            <span class="slider-label">
+              Search radius
+              <output>{formatDistance(searchRadiusM)}</output>
+            </span>
+            <input type="range" min="100" max="2000" step="50" bind:value={searchRadiusM} disabled={searching} />
+          </label>
+          <p class="hint">Larger radii take longer: OpenStreetMap returns a lot more data.</p>
+
+          <button type="button" class="primary-button" on:click={startSearch} disabled={searching || !origin}>
+            {#if searching}<span class="spinner" aria-hidden="true"></span>Searching…{:else}Search this area{/if}
+          </button>
+          <p class="status" class:error-text={statusIsError} role="status" aria-live="polite">
+            {statusMessage}
+          </p>
+        </section>
+      {/if}
+
+      {#if sites.length}
+        <section class="panel-section results">
+          <h2>3. Candidate sites <span class="count">{sites.length}</span></h2>
+          <p class="legend">
+            <span><i style="background:{TOP_PICK_COLOR}"></i>Top pick</span>
+            <span><i style="background:{OTHER_SITE_COLOR}"></i>Other woodland</span>
+          </p>
+          <ol class="site-list" bind:this={listElement}>
+            {#each sites as site, i (site.id)}
+              {@const terrain = describeTerrain(site.terrain_description)}
+              {@const flags = summariseRedFlags(site.nearby_red_flags)}
+              {@const topPick = isTopPick(site)}
+              <li data-site-id={site.id}>
+                <button
+                  type="button"
+                  class="site-card"
+                  class:top-pick={topPick}
+                  class:selected={String(site.id) === selectedKey}
+                  aria-pressed={String(site.id) === selectedKey}
+                  on:click={() => selectSite(site)}
+                >
+                  <span class="rank" aria-label="Rank {i + 1}">{i + 1}</span>
+                  <span class="site-body">
+                    {#if topPick}<span class="badge">Top pick</span>{/if}
+                    <span class="site-title">{terrain.name || terrain.kind}</span>
+                    {#if terrain.name}<span class="site-kind">{terrain.kind}</span>{/if}
+                    <span class="site-meta">
+                      {formatDistance(site.distance_to_bbox_m)} from route · {formatArea(site.area_m2)}
+                      {#if site.distance_to_water_m != null}· water {formatDistance(site.distance_to_water_m)}{/if}
+                    </span>
+                    {#if flags}<span class="site-flags">Nearby: {flags}</span>{/if}
+                    {#if site.suitability_reason && site.suitability_reason !== "heuristic fallback"}
+                      <span class="reason">“{site.suitability_reason}”</span>
                     {/if}
                   </span>
-                </div>
-              </div>
-              <p style="margin: 8px 0; font-size: 0.8rem; color: #475569;">
-                <strong>{Math.round(site.distance_to_bbox_m)}m</strong> away •
-                <strong>{site.area_size_band}</strong> area
-              </p>
-
-              {#if site.suitability_reason && site.suitability_reason !== "heuristic fallback"}
-                <p class="reason-text">"{site.suitability_reason}"</p>
-              {/if}
-            </li>
-          {/each}
-        </ul>
+                  <span class="score" class:pending={site.suitability_score == null}>
+                    {#if site.suitability_score == null && searching}
+                      <span class="spinner small" aria-label="Scoring"></span>
+                    {:else}
+                      {formatScore(site.suitability_score)}
+                    {/if}
+                  </span>
+                </button>
+              </li>
+            {/each}
+          </ol>
+        </section>
       {/if}
     </aside>
   </div>
-</main>
+</div>
