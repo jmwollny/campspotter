@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets & Python (previously covered by lab/.gitignore)
+.env
+.venv
+__pycache__/
+*.pyc
