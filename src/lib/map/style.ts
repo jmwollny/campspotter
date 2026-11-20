@@ -13,7 +13,7 @@ export const SOURCE_IDS = [
   "gpx-track",
   "site-shapes",
   "selected-shape",
-  "nearest-lines",
+  "site-lines",
   "sites",
 ] as const;
 export type SourceId = (typeof SOURCE_IDS)[number];
@@ -63,11 +63,24 @@ export function addSourcesAndLayers(map: MapboxMap): void {
     source: "selected-shape",
     paint: { "line-color": "#0f172a", "line-width": 2.5 },
   });
+  // Lines to the top picks (green) and the selected site (dark), each on a white casing
+  // so they stand out from roads and paths on the map.
   map.addLayer({
-    id: "nearest-lines",
+    id: "site-lines-casing",
     type: "line",
-    source: "nearest-lines",
-    paint: { "line-color": "#0f172a", "line-width": 1.5, "line-opacity": 0.6, "line-dasharray": [1, 1.5] },
+    source: "site-lines",
+    layout: { "line-cap": "round" },
+    paint: { "line-color": "#ffffff", "line-width": 5.5, "line-opacity": 0.9 },
+  });
+  map.addLayer({
+    id: "site-lines",
+    type: "line",
+    source: "site-lines",
+    layout: { "line-cap": "round" },
+    paint: {
+      "line-color": ["case", ["get", "topPick"], TOP_PICK_COLOR, "#0f172a"],
+      "line-width": 3,
+    },
   });
   map.addLayer({
     id: SITES_LAYER,

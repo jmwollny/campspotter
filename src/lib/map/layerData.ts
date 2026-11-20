@@ -4,7 +4,7 @@ import type { FeatureCollection } from "geojson";
 import {
   circlePolygonFeature,
   featureCollection,
-  lineToNearestPointFeature,
+  lineToSiteFeature,
   siteShapeFeature,
   siteToFeature,
 } from "../geo";
@@ -36,11 +36,17 @@ export function buildLayerData(state: MapState): Record<SourceId, FeatureCollect
         siteToFeature(site, index, { topPick: isTop(site), selected: site.id === selectedId }),
       ),
     ),
-    // Lines from the route only to the top picks (and the selected site) to avoid a cluttered fan.
-    "nearest-lines": featureCollection(
+    // Lines from the search point to the top picks (and the selected site) only, to avoid
+    // a cluttered fan of lines to every candidate.
+    "site-lines": featureCollection(
       sites
         .map((site, index) =>
-          isTop(site) || site.id === selectedId ? lineToNearestPointFeature(origin, site, index) : null,
+          isTop(site) || site.id === selectedId
+            ? lineToSiteFeature(origin, site, index, {
+                topPick: isTop(site),
+                selected: site.id === selectedId,
+              })
+            : null,
         )
         .filter(isPresent),
     ),

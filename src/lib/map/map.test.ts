@@ -1,3 +1,4 @@
+import type { LineString } from "geojson";
 import { describe, expect, it } from "vitest";
 
 import type { Site } from "../types";
@@ -44,8 +45,16 @@ describe("buildLayerData", () => {
   });
 
   it("draws lines only to the top picks and the selected site", () => {
-    const lines = buildLayerData(state({ selectedId: 3 }))["nearest-lines"].features;
-    expect(lines.map((f) => f.properties?.id)).toEqual(["2", "3"]);
+    const lines = buildLayerData(state({ selectedId: 3 }))["site-lines"].features;
+    expect(lines.map((f) => f.properties)).toEqual([
+      { id: "2", rank: 2, topPick: true, selected: false },
+      { id: "3", rank: 3, topPick: false, selected: true },
+    ]);
+    // Each line ends at its site's dot.
+    expect(lines.map((f) => (f.geometry as LineString).coordinates[1])).toEqual([
+      [-1, 51.002],
+      [-1, 51.003],
+    ]);
   });
 
   it("outlines the selected site", () => {
@@ -56,7 +65,7 @@ describe("buildLayerData", () => {
   it("draws the search circle only with a search point", () => {
     expect(buildLayerData(state())["search-radius"].features).toHaveLength(1);
     expect(buildLayerData(state({ origin: null }))["search-radius"].features).toHaveLength(0);
-    expect(buildLayerData(state({ origin: null }))["nearest-lines"].features).toHaveLength(0);
+    expect(buildLayerData(state({ origin: null }))["site-lines"].features).toHaveLength(0);
   });
 
   it("is empty with nothing loaded", () => {

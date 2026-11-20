@@ -12,7 +12,7 @@ import {
   formatDistance,
   formatScore,
   lineLengthKm,
-  lineToNearestPointFeature,
+  lineToSiteFeature,
   siteShapeFeature,
   siteToFeature,
   sortFinalSites,
@@ -123,11 +123,12 @@ describe("map features", () => {
     });
   });
 
-  it("draws a line from the origin to the nearest point", () => {
-    const feature = must(lineToNearestPointFeature({ lat: 51, lon: -1 }, site, 2));
-    expect(feature.geometry.coordinates).toEqual([[-1, 51], [-1.2, 51.101]]);
-    expect(lineToNearestPointFeature(null, site, 0)).toBeNull();
-    expect(lineToNearestPointFeature({ lat: 51, lon: -1 }, { id: 1 }, 0)).toBeNull();
+  it("draws a line from the origin to the site's dot", () => {
+    // Ends at the site's dot (not its nearest edge), so it's clear which site it belongs to.
+    const feature = must(lineToSiteFeature({ lat: 51, lon: -1 }, site, 2, { topPick: true }));
+    expect(feature.geometry.coordinates).toEqual([[-1, 51], [-1.2, 51.1]]);
+    expect(feature.properties).toEqual({ id: "42", rank: 3, topPick: true, selected: false });
+    expect(lineToSiteFeature(null, site, 0)).toBeNull();
   });
 
   it("uses the real outline when present, else the bounding box", () => {

@@ -106,20 +106,33 @@ export const siteToFeature = (
   geometry: { type: "Point", coordinates: [site.lon, site.lat] },
 });
 
-export function lineToNearestPointFeature(
+export interface SiteLineProperties {
+  id: string;
+  rank: number;
+  topPick: boolean;
+  selected: boolean;
+}
+
+/**
+ * A straight line from the search point to the site's numbered dot, so it is obvious
+ * which site each line belongs to. (Distances in the list are still measured to the
+ * site's nearest edge.)
+ */
+export function lineToSiteFeature(
   origin: LatLon | null | undefined,
-  site: Pick<Site, "id" | "nearest_bbox_point">,
+  site: Pick<Site, "id" | "lat" | "lon">,
   index: number,
-): Feature<LineString, { id: string; rank: number }> | null {
-  if (!origin || !site.nearest_bbox_point) return null;
+  { topPick = false, selected = false }: { topPick?: boolean; selected?: boolean } = {},
+): Feature<LineString, SiteLineProperties> | null {
+  if (!origin) return null;
   return {
     type: "Feature",
-    properties: { id: String(site.id ?? ""), rank: index + 1 },
+    properties: { id: String(site.id ?? ""), rank: index + 1, topPick, selected },
     geometry: {
       type: "LineString",
       coordinates: [
         [origin.lon, origin.lat],
-        [site.nearest_bbox_point.lon, site.nearest_bbox_point.lat],
+        [site.lon, site.lat],
       ],
     },
   };
