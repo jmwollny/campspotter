@@ -77,14 +77,16 @@ def fake_pipeline(monkeypatch):
         pipeline, "summarise_sites", lambda elements, origin: [dict(site)]
     )
     monkeypatch.setattr(pipeline, "enrich_sites", lambda s: s)
-    monkeypatch.setattr(pipeline, "get_camping_criteria", lambda: "criteria")
-    monkeypatch.setattr(pipeline, "score_and_select_sites", lambda c, s: [7])
+    monkeypatch.setattr(pipeline, "score_and_select_sites", lambda s: [7])
     monkeypatch.setattr(pipeline, "add_outlines", lambda s, origin, ids: s)
     return calls
 
 
 class FakeLLM:
-    """Stands in for the OpenAI client: returns `content` or raises `error`."""
+    """
+    Stands in for the OpenAI client: returns `content` or raises `error`. A list of
+    contents gives successive replies (the last one repeats).
+    """
 
     def __init__(self, content=None, error=None):
         self.content, self.error, self.calls = content, error, []
@@ -94,7 +96,10 @@ class FakeLLM:
         self.calls.append(kwargs)
         if self.error:
             raise self.error
-        message = SimpleNamespace(content=self.content)
+        content = self.content
+        if isinstance(content, list):
+            content = content[min(len(self.calls), len(content)) - 1]
+        message = SimpleNamespace(content=content)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 

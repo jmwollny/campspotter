@@ -1,14 +1,8 @@
 [
  [
   {
-   "role": "user",
-   "content": "What is the criteria for a good overnight wild camping spot? Make a bulleted list with no other text. Ignore any legal considerations because the intention is to arrive late, leave early and leave no trace."
-  }
- ],
- [
-  {
    "role": "system",
-   "content": "You are evaluating wild camping suitability. Use this wild camping criteria to help select the best sites: CRITERIA TEXT\nPrefer discreet terrain (wood/forest/scrub) away from red flags such as buildings. Return valid JSON only."
+   "content": "You are evaluating wild camping suitability. Use this wild camping criteria to help select the best sites: 1. Flat, even ground for comfortable sleeping and stable pitching. 2. Proximity to a water source (rivers or lakes) for drinking and cooking. 3. Natural shelter from wind, such as bushes, depressions, or treelines. 4. Visual concealment from roads, trails, and nearby dwellings. 5. Distance from livestock to avoid noise, mess, and curiosity.\nPrefer discreet terrain (wood/forest/scrub) away from red flags such as buildings. Return valid JSON only."
   },
   {
    "role": "user",

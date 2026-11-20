@@ -65,9 +65,7 @@ def test_site_rejects_unknown_fields():
 
 def test_real_pipeline_output_matches_the_site_model(real_elements):
     sites = summarise.summarise_sites(real_elements, (51.3224410, -1.8934199))
-    select_sites.score_and_select_sites(
-        "criteria", sites
-    )  # heuristic scores (no LLM in tests)
+    select_sites.score_and_select_sites(sites)  # heuristic scores (no LLM in tests)
     sites[0]["geometry"] = [{"lat": 51.32, "lon": -1.89}, {"lat": 51.33, "lon": -1.88}]
 
     message = FinalMessage.model_validate(

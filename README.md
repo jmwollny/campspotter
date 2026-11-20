@@ -40,8 +40,8 @@ ollama run safe-gemma --keepalive 30m
 ```
 
 To use that profile, set `OLLAMA_MODEL=safe-gemma` in `server/.env`. To use Gemini instead, set
-`LOCAL_LLM_ENABLED=false` and `GEMINI_API_KEY=...`. If no LLM is reachable, the server still works: it
-falls back to a simple built-in scoring heuristic. See [`server/.env.example`](server/.env.example) for
+`LOCAL_LLM_ENABLED=false` and `GEMINI_API_KEY=...`. If no LLM is reachable (or it replies with
+unusable JSON twice), the server still works: it falls back to a simple built-in scoring heuristic. See [`server/.env.example`](server/.env.example) for
 all the settings.
 
 ## How to use
@@ -61,8 +61,9 @@ Results stream in as each stage finishes:
 2. **Summarise.** Work out each wood's size, its distance from the route, and the red flags within
    150 m of it.
 3. **Enrich.** For the nearest candidates (10 by default), find the distance to major roads and water.
-4. **Score.** Ask the LLM for wild camping criteria, then ask it to score the candidates and pick the
-   best three.
+4. **Score.** Ask the LLM to score the candidates against a fixed set of wild camping criteria and
+   pick the best three. The reply must be JSON matching a schema; an invalid reply gets one stricter
+   retry, then the built-in heuristic takes over.
 5. **Outline.** Fetch the full outline of the three top picks from OpenStreetMap.
 
 Top picks are shown in green and numbered on the map. Click a site in the list or on the map to zoom to

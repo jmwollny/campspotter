@@ -21,7 +21,7 @@ from models import (
     StatusMessage,
 )
 from outline import add_outlines
-from select_sites import get_camping_criteria, score_and_select_sites
+from select_sites import score_and_select_sites
 from summarise import summarise_sites
 
 Emit = Callable[[ServerMessage], Awaitable[None]]
@@ -58,10 +58,7 @@ async def run_search(request: SearchRequest, emit: Emit) -> None:
 
     # --- Stage 4 + 5: select and outline ---
     await emit(StatusMessage(msg="Scoring sites and fetching outlines..."))
-    criteria = await asyncio.to_thread(get_camping_criteria)
-    selected_ids = await asyncio.to_thread(
-        score_and_select_sites, criteria, enriched_sites
-    )
+    selected_ids = await asyncio.to_thread(score_and_select_sites, enriched_sites)
     final_sites = await asyncio.to_thread(
         add_outlines, enriched_sites, origin, selected_ids
     )

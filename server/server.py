@@ -8,7 +8,12 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketState
 
 from config import configure_logging, get_settings
-from models import ErrorMessage, SearchRequest, ServerMessage
+from models import (
+    ErrorMessage,
+    SearchRequest,
+    ServerMessage,
+    describe_validation_error,
+)
 from pipeline import run_search
 
 configure_logging()
@@ -27,15 +32,6 @@ app.add_middleware(
 def parse_search_request(raw: str) -> SearchRequest:
     """Validate the client's {"lat", "lon", "radius"} message (radius is clamped)."""
     return SearchRequest.model_validate_json(raw)
-
-
-def describe_validation_error(exc: ValidationError) -> str:
-    """One short line per problem, e.g. "lat: Input should be less than or equal to 90"."""
-    problems = []
-    for error in exc.errors():
-        location = ".".join(str(part) for part in error["loc"])
-        problems.append(f"{location}: {error['msg']}" if location else error["msg"])
-    return "; ".join(problems)
 
 
 async def send(websocket: WebSocket, message: ServerMessage) -> None:

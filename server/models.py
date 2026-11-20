@@ -6,12 +6,21 @@ The front end's src/lib/types.ts mirrors these models; keep the two in sync.
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 MIN_RADIUS_M = 100
 MAX_RADIUS_M = 5000
 
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+def describe_validation_error(exc: ValidationError) -> str:
+    """One short line per problem, e.g. "lat: Input should be less than or equal to 90"."""
+    problems = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"])
+        problems.append(f"{location}: {error['msg']}" if location else error["msg"])
+    return "; ".join(problems)
 
 
 class SearchRequest(BaseModel):
@@ -117,6 +126,31 @@ class ErrorMessage(BaseModel):
 
 
 ServerMessage = StatusMessage | BatchMessage | FinalMessage | ErrorMessage
+
+
+# --------------------------------------------------------------------------- #
+# LLM replies
+# --------------------------------------------------------------------------- #
+
+
+class Evaluation(BaseModel):
+    """The LLM's verdict on one candidate site."""
+
+    id: int  # numeric strings ("123") are accepted
+    suitability_score: FiniteFloat
+    reason: str = ""
+
+    @field_validator("suitability_score")
+    @classmethod
+    def clamp_score(cls, value: float) -> float:
+        return max(0.0, min(100.0, value))
+
+
+class SelectionResponse(BaseModel):
+    """What the selection prompt asks the LLM to return."""
+
+    selected_ids: list[int] = []
+    evaluations: list[Evaluation] = []
 
 
 # --------------------------------------------------------------------------- #

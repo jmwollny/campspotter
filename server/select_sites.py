@@ -2,23 +2,12 @@
 
 import json
 import logging
-import math
 from typing import Any
 
 import config
-from llm_client import (
-    ChatMessage,
-    LLMUnavailable,
-    complete,
-    parse_json_object_from_text,
-)
-from models import SiteRecord
-from prompts import (
-    CRITERIA_PROMPT,
-    DEFAULT_CRITERIA,
-    SELECTION_SYSTEM_TEMPLATE,
-    SELECTION_USER_TEMPLATE,
-)
+from llm_client import ChatMessage, LLMUnavailable, complete_json
+from models import SelectionResponse, SiteRecord
+from prompts import SELECTION_SYSTEM_PROMPT, SELECTION_USER_TEMPLATE
 from summarise import count_red_flags_by_type
 
 logger = logging.getLogger(__name__)
@@ -75,34 +64,8 @@ def to_int_id(value: Any) -> int | None:
         return None
 
 
-def to_score(value: Any) -> float | None:
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(score):
-        return None
-    return max(0.0, min(100.0, score))
-
-
-def get_camping_criteria() -> str:
-    """Ask the LLM for wild camping criteria; fall back to a fixed list on any failure."""
-    try:
-        content = complete(
-            [{"role": "user", "content": CRITERIA_PROMPT}], purpose="criteria"
-        ).strip()
-    except LLMUnavailable:
-        return DEFAULT_CRITERIA
-    except Exception as exc:
-        logger.warning(
-            f"LLM criteria retrieval failed ({exc}); using default criteria."
-        )
-        return DEFAULT_CRITERIA
-    return content or DEFAULT_CRITERIA
-
-
 def score_and_select_sites(
-    criteria: str, sites: list[SiteRecord], max_candidates: int = 3
+    sites: list[SiteRecord], max_candidates: int = 3
 ) -> list[int]:
     """
     Score the nearest candidate sites (sets suitability_score/suitability_reason on them) and
@@ -130,7 +93,7 @@ def score_and_select_sites(
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "content": SELECTION_SYSTEM_TEMPLATE.format(criteria=criteria),
+            "content": SELECTION_SYSTEM_PROMPT,
         },
         {
             "role": "user",
@@ -141,31 +104,19 @@ def score_and_select_sites(
         },
     ]
     try:
-        content = complete(messages, purpose="selection")
+        reply = complete_json(messages, SelectionResponse, purpose="selection")
     except LLMUnavailable:
         return select_by_heuristic(candidate_sites, max_candidates)
-    except Exception as exc:
+    except Exception as exc:  # provider error, timeout, or LLMReplyInvalid after retry
         logger.warning(f"LLM selection failed ({exc}); using heuristic fallback.")
         return select_by_heuristic(candidate_sites, max_candidates)
 
-    parsed = parse_json_object_from_text(content)
-    if not parsed:
-        logger.warning(
-            f"Could not parse LLM response ({content[:300]!r}); using heuristic fallback."
-        )
-        return select_by_heuristic(candidate_sites, max_candidates)
-
-    eval_map = {}
-    for item in parsed.get("evaluations") or []:
-        if isinstance(item, dict) and to_int_id(item.get("id")) is not None:
-            eval_map[to_int_id(item.get("id"))] = item
-
+    evaluations = {evaluation.id: evaluation for evaluation in reply.evaluations}
     for site in candidate_sites:
-        evaluation = eval_map.get(site.get("id"))
-        score = to_score(evaluation.get("suitability_score")) if evaluation else None
-        if evaluation and score is not None:
-            site["suitability_score"] = score
-            site["suitability_reason"] = evaluation.get("reason") or ""
+        evaluation = evaluations.get(site["id"])
+        if evaluation is not None:
+            site["suitability_score"] = evaluation.suitability_score
+            site["suitability_reason"] = evaluation.reason
         else:
             site["suitability_score"] = heuristic_score(site)
             site["suitability_reason"] = "heuristic fallback"
@@ -173,13 +124,8 @@ def score_and_select_sites(
     # Only accept ids that were actually offered; LLMs sometimes invent or repeat them.
     candidate_ids = {site.get("id") for site in candidate_sites}
     selected_ids: list[int] = []
-    for raw_id in parsed.get("selected_ids") or []:
-        site_id = to_int_id(raw_id)
-        if (
-            site_id is not None
-            and site_id in candidate_ids
-            and site_id not in selected_ids
-        ):
+    for site_id in reply.selected_ids:
+        if site_id in candidate_ids and site_id not in selected_ids:
             selected_ids.append(site_id)
 
     if not selected_ids:

@@ -17,8 +17,7 @@ def render_prompts(monkeypatch, real_elements) -> list:
     sites = summarise.summarise_sites(real_elements, (51.3224410, -1.8934199))
     fake = FakeLLM('{"selected_ids": [], "evaluations": []}')
     use_llm(monkeypatch, fake)
-    select_sites.get_camping_criteria()
-    select_sites.score_and_select_sites("CRITERIA TEXT", sites)
+    select_sites.score_and_select_sites(sites)
     return [call["messages"] for call in fake.calls]
 
 
@@ -42,8 +41,8 @@ def test_prompts_match_the_snapshot(monkeypatch, real_elements):
     [
         (prompts.SELECTION_SYSTEM_TEMPLATE, {"criteria"}),
         (prompts.SELECTION_USER_TEMPLATE, {"max_candidates", "candidates_json"}),
-        (prompts.CRITERIA_PROMPT, set()),
-        (prompts.DEFAULT_CRITERIA, set()),
+        (prompts.CAMPING_CRITERIA, set()),
+        (prompts.STRICT_JSON_RETRY_TEMPLATE, {"problems", "schema_json"}),
     ],
 )
 def test_templates_use_only_their_placeholders(template, placeholders):

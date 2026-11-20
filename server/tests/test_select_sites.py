@@ -60,82 +60,104 @@ def test_heuristic_penalises_red_flags_but_not_barriers():
 
 def test_select_without_llm_uses_heuristic():
     sites = make_candidates()
-    selected = select_sites.score_and_select_sites("criteria", sites, max_candidates=2)
+    selected = select_sites.score_and_select_sites(sites, max_candidates=2)
     assert selected[0] == 1
     assert len(selected) == 2
     assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
 
-def test_select_normalises_string_ids_and_drops_unknown_ones(monkeypatch):
+def test_select_uses_llm_scores_and_drops_unknown_ids(monkeypatch):
     fake = FakeLLM(
         json.dumps(
             {
-                "selected_ids": ["3", 999, "1", "3", "abc"],
+                "selected_ids": ["3", 999, "1", "3"],
                 "evaluations": [
                     {"id": "1", "suitability_score": "85", "reason": "big quiet wood"},
                     {"id": 3, "suitability_score": 140, "reason": "too high"},
-                    {
-                        "id": 2,
-                        "suitability_score": "n/a",
-                        "reason": "unparseable score",
-                    },
                 ],
             }
         )
     )
     use_llm(monkeypatch, fake)
     sites = make_candidates()
-    selected = select_sites.score_and_select_sites("criteria", sites)
+    selected = select_sites.score_and_select_sites(sites)
 
-    assert selected == [3, 1]
+    assert selected == [3, 1]  # 999 was never offered; the repeated 3 counts once
     by_id = {s["id"]: s for s in sites}
     assert by_id[1]["suitability_score"] == 85
     assert by_id[1]["suitability_reason"] == "big quiet wood"
     assert by_id[3]["suitability_score"] == 100  # clamped
-    assert by_id[2]["suitability_reason"] == "heuristic fallback"
-    prompt = fake.calls[0]["messages"][1]["content"]
-    assert '"nearby_red_flags": {"BUILDING": 2}' in prompt
+    assert by_id[2]["suitability_reason"] == "heuristic fallback"  # not evaluated
+    assert len(fake.calls) == 1
+    system, user = (m["content"] for m in fake.calls[0]["messages"])
+    assert prompts.CAMPING_CRITERIA in system
+    assert '"nearby_red_flags": {"BUILDING": 2}' in user
+    response_format = fake.calls[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "SelectionResponse"
+
+
+def test_invalid_reply_is_retried_once_with_a_stricter_prompt(monkeypatch):
+    bad = json.dumps({"selected_ids": ["abc"], "evaluations": []})
+    good = json.dumps(
+        {"selected_ids": [2], "evaluations": [{"id": 2, "suitability_score": 70}]}
+    )
+    fake = FakeLLM([bad, good])
+    use_llm(monkeypatch, fake)
+    sites = make_candidates()
+
+    assert select_sites.score_and_select_sites(sites) == [2]
+    assert len(fake.calls) == 2
+    retry_messages = fake.calls[1]["messages"]
+    assert retry_messages[:2] == fake.calls[0]["messages"]
+    assert retry_messages[2] == {"role": "assistant", "content": bad}
+    assert retry_messages[3]["role"] == "user"
+    assert "selected_ids.0" in retry_messages[3]["content"]  # says what was wrong
+    assert '"SelectionResponse"' in retry_messages[3]["content"]  # includes the schema
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        ["I can't answer that", "still no JSON"],
+        ['{"evaluations": [{"id": 1, "suitability_score": "n/a"}]}'] * 2,
+    ],
+)
+def test_two_invalid_replies_fall_back_to_the_heuristic(monkeypatch, replies):
+    fake = FakeLLM(replies)
+    use_llm(monkeypatch, fake)
+    sites = make_candidates()
+    assert select_sites.score_and_select_sites(sites)[0] == 1
+    assert len(fake.calls) == 2
+    assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
+
+
+def test_provider_errors_fall_back_without_a_retry(monkeypatch):
+    fake = FakeLLM(error=ConnectionError("ollama down"))
+    use_llm(monkeypatch, fake)
+    sites = make_candidates()
+    assert select_sites.score_and_select_sites(sites)[0] == 1
+    assert len(fake.calls) == 1
+    assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
 
 def test_select_falls_back_when_llm_returns_no_valid_ids(monkeypatch):
     use_llm(
         monkeypatch, FakeLLM(json.dumps({"selected_ids": [12345], "evaluations": []}))
     )
-    selected = select_sites.score_and_select_sites(
-        "criteria", make_candidates(), max_candidates=1
-    )
+    selected = select_sites.score_and_select_sites(make_candidates(), max_candidates=1)
     assert selected == [1]
-
-
-@pytest.mark.parametrize(
-    "fake",
-    [FakeLLM("I can't answer that"), FakeLLM(error=ConnectionError("ollama down"))],
-)
-def test_select_falls_back_when_llm_fails(monkeypatch, fake):
-    use_llm(monkeypatch, fake)
-    sites = make_candidates()
-    assert select_sites.score_and_select_sites("criteria", sites)[0] == 1
-    assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
 
 def test_select_respects_candidate_pool_size(monkeypatch):
     monkeypatch.setenv("LLM_CANDIDATE_POOL_SIZE", "2")
     sites = make_candidates()
-    select_sites.score_and_select_sites("criteria", sites)
+    select_sites.score_and_select_sites(sites)
     assert "suitability_score" not in sites[2]
 
 
 def test_select_with_no_sites_returns_empty(monkeypatch):
     fake = FakeLLM("{}")
     use_llm(monkeypatch, fake)
-    assert select_sites.score_and_select_sites("criteria", []) == []
+    assert select_sites.score_and_select_sites([]) == []
     assert fake.calls == []
-
-
-def test_criteria_falls_back_on_error_and_empty_reply(monkeypatch):
-    use_llm(monkeypatch, FakeLLM(error=TimeoutError()))
-    assert select_sites.get_camping_criteria() == prompts.DEFAULT_CRITERIA
-    use_llm(monkeypatch, FakeLLM("   "))
-    assert select_sites.get_camping_criteria() == prompts.DEFAULT_CRITERIA
-    use_llm(monkeypatch, FakeLLM("- flat ground"))
-    assert select_sites.get_camping_criteria() == "- flat ground"

@@ -45,7 +45,7 @@ def test_discover_error_is_emitted_and_stops(fake_pipeline, monkeypatch):
 def test_no_woods_found_is_reported_and_stops(fake_pipeline, monkeypatch):
     monkeypatch.setattr(pipeline, "summarise_sites", lambda e, o: [])
     monkeypatch.setattr(
-        pipeline, "get_camping_criteria", lambda: pytest.fail("LLM not needed")
+        pipeline, "score_and_select_sites", lambda s: pytest.fail("LLM not needed")
     )
     messages = run(SearchRequest(lat=51.0, lon=-1.0, radius=300))
     assert messages[-1].type == "error"
