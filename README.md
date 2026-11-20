@@ -52,7 +52,8 @@ all the settings.
    keyboard (arrow keys) too.
 3. Optionally change the **Search radius** (default 500 m). Larger values are slower, because
    OpenStreetMap returns a lot more data.
-4. Click **Search this area**.
+4. Click **Search this area**. Changed your mind? **Cancel** (or Esc) stops the search, and the server stops
+   working on it too.
 
 Results stream in as each stage finishes:
 
