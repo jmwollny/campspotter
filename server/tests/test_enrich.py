@@ -45,4 +45,15 @@ def test_context_metrics_pick_nearest_road_and_water():
 def test_context_fetch_tolerates_bad_overpass_responses(monkeypatch, response):
     monkeypatch.setattr(enrich, "call_overpass_with_retry", lambda query: response)
     sites = [{"id": 1, "lat": 51.0, "lon": -1.0}]
-    assert enrich.fetch_roads_and_water(sites) == []
+    assert enrich.fetch_roads_and_water(sites) is None
+
+
+def test_enrich_reports_whether_road_and_water_data_arrived(monkeypatch):
+    sites = [{"id": 1, "lat": 51.0, "lon": -1.0}]
+    monkeypatch.setattr(enrich, "call_overpass_with_retry", lambda query: None)
+    assert enrich.enrich_sites(sites) is False
+    assert sites[0]["distance_to_water_m"] is None
+    monkeypatch.setattr(
+        enrich, "call_overpass_with_retry", lambda query: {"elements": []}
+    )
+    assert enrich.enrich_sites(sites) is True  # answered, just nothing nearby

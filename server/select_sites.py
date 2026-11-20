@@ -2,15 +2,24 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import config
-from llm_client import ChatMessage, LLMUnavailable, complete_json
+from llm_client import ChatMessage, LLMError, LLMUnavailable, complete_json
 from models import SelectionResponse, SiteRecord
 from prompts import SELECTION_SYSTEM_PROMPT, SELECTION_USER_TEMPLATE
 from summarise import count_red_flags_by_type
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Selection:
+    """The chosen site ids, best first, and why the heuristic was used (if it was)."""
+
+    ids: list[int]
+    fallback_reason: str | None = None
 
 
 def heuristic_score(site: SiteRecord) -> float:
@@ -66,14 +75,14 @@ def to_int_id(value: Any) -> int | None:
 
 def score_and_select_sites(
     sites: list[SiteRecord], max_candidates: int = 3
-) -> list[int]:
+) -> Selection:
     """
     Score the nearest candidate sites (sets suitability_score/suitability_reason on them) and
-    return up to `max_candidates` ids to fetch full geometry for.
+    choose up to `max_candidates` of them. Falls back to the heuristic if the LLM can't help.
     """
     candidate_sites = sites[: config.get_settings().llm_candidate_pool_size]
     if not candidate_sites:
-        return []
+        return Selection([])
 
     logger.info(f"Scoring {len(candidate_sites)} candidate sites.")
 
@@ -105,11 +114,16 @@ def score_and_select_sites(
     ]
     try:
         reply = complete_json(messages, SelectionResponse, purpose="selection")
-    except LLMUnavailable:
-        return select_by_heuristic(candidate_sites, max_candidates)
-    except Exception as exc:  # provider error, timeout, or LLMReplyInvalid after retry
+    except LLMUnavailable as exc:
+        return Selection(
+            select_by_heuristic(candidate_sites, max_candidates), exc.reason
+        )
+    except (
+        Exception
+    ) as exc:  # LLMRequestFailed, LLMReplyInvalid, or anything unexpected
+        reason = exc.reason if isinstance(exc, LLMError) else LLMError.reason
         logger.warning(f"LLM selection failed ({exc}); using heuristic fallback.")
-        return select_by_heuristic(candidate_sites, max_candidates)
+        return Selection(select_by_heuristic(candidate_sites, max_candidates), reason)
 
     evaluations = {evaluation.id: evaluation for evaluation in reply.evaluations}
     for site in candidate_sites:
@@ -133,4 +147,4 @@ def score_and_select_sites(
             candidate_sites, key=lambda site: site["suitability_score"], reverse=True
         )
         selected_ids = [site["id"] for site in ranked]
-    return selected_ids[:max_candidates]
+    return Selection(selected_ids[:max_candidates])

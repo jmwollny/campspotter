@@ -28,13 +28,14 @@ def collect(client, payload):
 def test_search_streams_pipeline_messages_over_the_websocket(client, fake_pipeline):
     messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 800})
     assert [m["type"] for m in messages] == [
-        "status",
+        "status",  # retrieving
         "batch",
-        "status",
+        "status",  # roads/water
         "batch",
-        "status",
+        "status",  # scoring
+        "status",  # outlines
         "final",
-        "status",
+        "status",  # complete
     ]
     assert messages[-2]["refined_ids"] == [7]
     assert fake_pipeline["scout"] == ((51.0, -1.0), 800)

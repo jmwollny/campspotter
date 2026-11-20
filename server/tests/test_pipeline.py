@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 import pipeline
+import select_sites
 from models import SearchRequest, ServerMessage
 
 
@@ -19,13 +20,14 @@ def run(request: SearchRequest) -> list[ServerMessage]:
 def test_happy_path_emits_every_stage(fake_pipeline):
     messages = run(SearchRequest(lat=51.0, lon=-1.0, radius=800))
     assert [m.type for m in messages] == [
-        "status",
+        "status",  # retrieving
         "batch",
-        "status",
+        "status",  # roads/water
         "batch",
-        "status",
+        "status",  # scoring
+        "status",  # outlines
         "final",
-        "status",
+        "status",  # complete
     ]
     final = messages[-2]
     assert final.type == "final" and final.refined_ids == [7]
@@ -59,3 +61,49 @@ def test_stage_exceptions_propagate_to_the_caller(fake_pipeline, monkeypatch):
     monkeypatch.setattr(pipeline, "enrich_sites", boom)
     with pytest.raises(RuntimeError, match="kaboom"):
         run(SearchRequest(lat=51.0, lon=-1.0))
+
+
+def test_fallbacks_are_reported_and_summarised(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(pipeline, "enrich_sites", lambda s: False)
+    monkeypatch.setattr(
+        pipeline,
+        "score_and_select_sites",
+        lambda s: select_sites.Selection([7], "the LLM couldn't be reached"),
+    )
+    messages = run(SearchRequest(lat=51.0, lon=-1.0))
+    statuses = [m.model_dump()["msg"] for m in messages if m.type == "status"]
+
+    assert any("Couldn't check roads and water" in s for s in statuses)
+    assert (
+        "Scored with the built-in heuristic: the LLM couldn't be reached." in statuses
+    )
+    assert statuses[-1] == (
+        "Analysis complete (roads/water not checked; "
+        "heuristic scores: the LLM couldn't be reached; "
+        "outlines unavailable, showing boxes)"
+    )
+
+
+def test_clean_run_has_a_plain_completion_message(fake_pipeline, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "add_outlines",
+        lambda s, origin, ids: [
+            {**site, "geometry": [{"lat": 1, "lon": 2}]} for site in s
+        ],
+    )
+    messages = run(SearchRequest(lat=51.0, lon=-1.0))
+    assert messages[-1].model_dump() == {"type": "status", "msg": "Analysis complete"}
+
+
+@pytest.mark.parametrize(
+    "sites, ids, expected",
+    [
+        ([{"id": 1, "type": "way"}], [1], True),
+        ([{"id": 1, "type": "way", "geometry": [{"lat": 1, "lon": 2}]}], [1], False),
+        ([{"id": 1, "type": "node"}], [1], False),  # nodes never have outlines
+        ([{"id": 1, "type": "way"}], [], False),
+    ],
+)
+def test_outlines_missing(sites, ids, expected):
+    assert pipeline.outlines_missing(sites, ids) is expected

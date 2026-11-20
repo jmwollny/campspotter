@@ -60,9 +60,10 @@ def test_heuristic_penalises_red_flags_but_not_barriers():
 
 def test_select_without_llm_uses_heuristic():
     sites = make_candidates()
-    selected = select_sites.score_and_select_sites(sites, max_candidates=2)
-    assert selected[0] == 1
-    assert len(selected) == 2
+    selection = select_sites.score_and_select_sites(sites, max_candidates=2)
+    assert selection.ids[0] == 1
+    assert len(selection.ids) == 2
+    assert selection.fallback_reason == "no LLM is configured"
     assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
 
@@ -80,9 +81,12 @@ def test_select_uses_llm_scores_and_drops_unknown_ids(monkeypatch):
     )
     use_llm(monkeypatch, fake)
     sites = make_candidates()
-    selected = select_sites.score_and_select_sites(sites)
+    selection = select_sites.score_and_select_sites(sites)
 
-    assert selected == [3, 1]  # 999 was never offered; the repeated 3 counts once
+    assert selection.ids == [3, 1]
+    assert (
+        selection.fallback_reason is None
+    )  # 999 was never offered; the repeated 3 counts once
     by_id = {s["id"]: s for s in sites}
     assert by_id[1]["suitability_score"] == 85
     assert by_id[1]["suitability_reason"] == "big quiet wood"
@@ -106,7 +110,7 @@ def test_invalid_reply_is_retried_once_with_a_stricter_prompt(monkeypatch):
     use_llm(monkeypatch, fake)
     sites = make_candidates()
 
-    assert select_sites.score_and_select_sites(sites) == [2]
+    assert select_sites.score_and_select_sites(sites) == select_sites.Selection([2])
     assert len(fake.calls) == 2
     retry_messages = fake.calls[1]["messages"]
     assert retry_messages[:2] == fake.calls[0]["messages"]
@@ -127,7 +131,9 @@ def test_two_invalid_replies_fall_back_to_the_heuristic(monkeypatch, replies):
     fake = FakeLLM(replies)
     use_llm(monkeypatch, fake)
     sites = make_candidates()
-    assert select_sites.score_and_select_sites(sites)[0] == 1
+    selection = select_sites.score_and_select_sites(sites)
+    assert selection.ids[0] == 1
+    assert selection.fallback_reason == "the LLM's replies weren't usable"
     assert len(fake.calls) == 2
     assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
@@ -136,7 +142,9 @@ def test_provider_errors_fall_back_without_a_retry(monkeypatch):
     fake = FakeLLM(error=ConnectionError("ollama down"))
     use_llm(monkeypatch, fake)
     sites = make_candidates()
-    assert select_sites.score_and_select_sites(sites)[0] == 1
+    selection = select_sites.score_and_select_sites(sites)
+    assert selection.ids[0] == 1
+    assert selection.fallback_reason == "the LLM request failed"
     assert len(fake.calls) == 1
     assert all(s["suitability_reason"] == "heuristic fallback" for s in sites)
 
@@ -145,7 +153,9 @@ def test_select_falls_back_when_llm_returns_no_valid_ids(monkeypatch):
     use_llm(
         monkeypatch, FakeLLM(json.dumps({"selected_ids": [12345], "evaluations": []}))
     )
-    selected = select_sites.score_and_select_sites(make_candidates(), max_candidates=1)
+    selected = select_sites.score_and_select_sites(
+        make_candidates(), max_candidates=1
+    ).ids
     assert selected == [1]
 
 
@@ -159,5 +169,5 @@ def test_select_respects_candidate_pool_size(monkeypatch):
 def test_select_with_no_sites_returns_empty(monkeypatch):
     fake = FakeLLM("{}")
     use_llm(monkeypatch, fake)
-    assert select_sites.score_and_select_sites([]) == []
+    assert select_sites.score_and_select_sites([]) == select_sites.Selection([])
     assert fake.calls == []

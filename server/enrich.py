@@ -45,8 +45,11 @@ def road_and_water_distances(
 
 def fetch_roads_and_water(
     sites: list[SiteRecord], radius_meters: float = 1200
-) -> list[OsmElement]:
-    """Fetch roads/water once for all candidate sites using a padded bbox query."""
+) -> list[OsmElement] | None:
+    """
+    Fetch roads/water once for all candidate sites using a padded bbox query.
+    Returns None if Overpass couldn't answer (as opposed to [] for "nothing nearby").
+    """
     site_coords = [
         (site["lat"], site["lon"])
         for site in sites
@@ -86,7 +89,7 @@ def fetch_roads_and_water(
     elements = response.get("elements") if response else None
     if not isinstance(elements, list):
         logger.warning("Context batch query returned no elements payload.")
-        return []
+        return None
     logger.info(
         f"Context batch query fetched {len(elements)} elements for {len(site_coords)} sites."
     )
@@ -95,15 +98,20 @@ def fetch_roads_and_water(
 
 def enrich_sites(
     sites: list[SiteRecord], max_sites: int | None = None, radius_meters: float = 1200
-) -> list[SiteRecord]:
-    """Add road/water distances to the nearest `max_sites` (default: the LLM candidate pool)."""
+) -> bool:
+    """
+    Add road/water distances (in place) to the nearest `max_sites` (default: the LLM
+    candidate pool). Returns False if the road/water data couldn't be fetched, in which
+    case the distances are left unknown.
+    """
     max_sites = max_sites or config.get_settings().llm_candidate_pool_size
     target_sites = sites[:max_sites]
     context_elements = fetch_roads_and_water(target_sites, radius_meters=radius_meters)
+    fetched = context_elements is not None
     for site in target_sites:
         if site.get("lat") is None or site.get("lon") is None:
             continue
         site.update(
-            road_and_water_distances(site["lat"], site["lon"], context_elements)
+            road_and_water_distances(site["lat"], site["lon"], context_elements or [])
         )
-    return sites
+    return fetched

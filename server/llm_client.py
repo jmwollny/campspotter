@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import openai
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, ValidationError
@@ -30,12 +31,43 @@ ChatMessage = ChatCompletionMessageParam
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
-class LLMUnavailable(Exception):
+class LLMError(Exception):
+    """Base class; `reason` is a short, user-facing explanation of what went wrong."""
+
+    reason = "the LLM request failed"
+
+    def __init__(self, detail: str = "", reason: str | None = None) -> None:
+        super().__init__(detail or reason or self.reason)
+        if reason is not None:
+            self.reason = reason
+
+
+class LLMUnavailable(LLMError):
     """No LLM is configured (local LLM disabled and no Gemini API key)."""
 
+    reason = "no LLM is configured"
 
-class LLMReplyInvalid(Exception):
+
+class LLMRequestFailed(LLMError):
+    """The provider couldn't be reached, timed out or returned an error."""
+
+
+class LLMReplyInvalid(LLMError):
     """The LLM's reply wasn't a JSON object matching the expected schema (after one retry)."""
+
+    reason = "the LLM's replies weren't usable"
+
+
+def _request_failure(exc: openai.APIError) -> LLMRequestFailed:
+    if isinstance(exc, openai.APITimeoutError):
+        reason = "the LLM timed out"
+    elif isinstance(exc, openai.APIConnectionError):
+        reason = "the LLM couldn't be reached"
+    elif isinstance(exc, openai.APIStatusError):
+        reason = f"the LLM returned an error (HTTP {exc.status_code})"
+    else:
+        reason = "the LLM request failed"
+    return LLMRequestFailed(str(exc), reason=reason)
 
 
 @dataclass(frozen=True)
@@ -83,7 +115,8 @@ def complete(
 ) -> str:
     """
     Send a chat request and return the reply text ("" if the model sent none).
-    Raises LLMUnavailable if no LLM is configured; provider errors propagate.
+    Raises LLMUnavailable if no LLM is configured and LLMRequestFailed if the provider
+    can't be reached, times out or returns an error.
     `purpose` is only used in log messages. `response_format` is passed through
     (complete_json uses it to request schema-shaped JSON).
     """
@@ -96,9 +129,12 @@ def complete(
     extra: dict[str, Any] = {}
     if response_format is not None:
         extra["response_format"] = response_format
-    response = chat.client.chat.completions.create(
-        model=chat.model, messages=messages, temperature=temperature, **extra
-    )
+    try:
+        response = chat.client.chat.completions.create(
+            model=chat.model, messages=messages, temperature=temperature, **extra
+        )
+    except openai.APIError as exc:
+        raise _request_failure(exc) from exc
     logger.info(f"LLM {purpose} completed in {time.perf_counter() - started:.2f}s.")
     content = response.choices[0].message.content or ""
     logger.debug(f"LLM {purpose} reply: {content}")
@@ -114,7 +150,7 @@ def complete_json[ReplyModel: BaseModel](
     The schema is sent as the response format (Ollama and Gemini can constrain their
     output to it). If the reply still isn't valid, the model gets one retry with a
     stricter prompt that lists what was wrong; a second failure raises LLMReplyInvalid.
-    LLMUnavailable and provider errors propagate without a retry.
+    LLMUnavailable and LLMRequestFailed propagate without a retry.
     """
     schema_json = schema.model_json_schema()
     response_format = {

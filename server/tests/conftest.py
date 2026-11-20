@@ -8,6 +8,7 @@ import pytest
 import config
 import llm_client
 import overpass
+import select_sites
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -76,8 +77,10 @@ def fake_pipeline(monkeypatch):
     monkeypatch.setattr(
         pipeline, "summarise_sites", lambda elements, origin: [dict(site)]
     )
-    monkeypatch.setattr(pipeline, "enrich_sites", lambda s: s)
-    monkeypatch.setattr(pipeline, "score_and_select_sites", lambda s: [7])
+    monkeypatch.setattr(pipeline, "enrich_sites", lambda s: True)
+    monkeypatch.setattr(
+        pipeline, "score_and_select_sites", lambda s: select_sites.Selection([7])
+    )
     monkeypatch.setattr(pipeline, "add_outlines", lambda s, origin, ids: s)
     return calls
 

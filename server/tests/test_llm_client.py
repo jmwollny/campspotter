@@ -1,3 +1,5 @@
+import httpx
+import openai
 import pytest
 
 import config
@@ -65,3 +67,33 @@ def test_complete_lets_provider_errors_propagate(monkeypatch):
 )
 def test_parse_json_object_from_text(text, expected):
     assert llm_client.parse_json_object_from_text(text) == expected
+
+
+def make_openai_error(kind):
+    request = httpx.Request("POST", "http://localhost:11434/v1/chat/completions")
+    if kind == "timeout":
+        return openai.APITimeoutError(request=request)
+    if kind == "connection":
+        return openai.APIConnectionError(request=request)
+    response = httpx.Response(500, request=request)
+    return openai.InternalServerError("boom", response=response, body=None)
+
+
+@pytest.mark.parametrize(
+    "kind, reason",
+    [
+        ("timeout", "the LLM timed out"),
+        ("connection", "the LLM couldn't be reached"),
+        ("status", "the LLM returned an error (HTTP 500)"),
+    ],
+)
+def test_provider_errors_become_llm_request_failed(monkeypatch, kind, reason):
+    use_llm(monkeypatch, FakeLLM(error=make_openai_error(kind)))
+    with pytest.raises(llm_client.LLMRequestFailed) as excinfo:
+        llm_client.complete([], purpose="test")
+    assert excinfo.value.reason == reason
+
+
+def test_llm_errors_have_default_reasons():
+    assert llm_client.LLMUnavailable().reason == "no LLM is configured"
+    assert llm_client.LLMReplyInvalid("x").reason == "the LLM's replies weren't usable"
