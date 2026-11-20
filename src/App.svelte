@@ -11,7 +11,7 @@
   import SearchControls from "./components/SearchControls.svelte";
   import SiteList from "./components/SiteList.svelte";
   import { runSearch, type SearchHandle } from "./lib/searchClient";
-  import { origin, searchRadiusM, selectSite, sites } from "./lib/stores";
+  import { origin, searchRadiusM, searching, selectSite, sites } from "./lib/stores";
   import type { Site } from "./lib/types";
 
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -31,6 +31,14 @@
   function searchPointMoved() {
     mapView.clearPopup();
     mapView.followSearchPoint();
+  }
+
+  function cancelSearch() {
+    currentSearch?.cancel();
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && get(searching)) cancelSearch();
   }
 
   function startSearch() {
@@ -56,6 +64,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleKeydown} />
+
 <a class="skip-link" href="#controls">Skip to route and search</a>
 
 <div class="app">
@@ -74,6 +84,7 @@
         on:move={searchPointMoved}
         on:scrubend={() => mapView.endScrub()}
         on:search={startSearch}
+        on:cancel={cancelSearch}
       />
       <SiteList bind:this={siteList} on:select={(event) => showSite(event.detail, "list")} />
     </section>

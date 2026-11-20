@@ -207,7 +207,7 @@ describe("runSearch", () => {
     handle.cancel();
     expect(socket.closed).toBe(true);
     expect(get(searching)).toBe(false);
-    expect(get(status)).toEqual({ message: "", isError: false });
+    expect(get(status)).toEqual({ message: "Search cancelled.", isError: false });
   });
 
   it("reports an invalid server address", () => {

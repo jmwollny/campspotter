@@ -4,7 +4,7 @@
   (aria-valuetext), and <output> is otherwise a live region that would repeat every move.
 -->
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, tick } from "svelte";
 
   import { formatDistance } from "../lib/geo";
   import { moveSearchPoint, origin, route, searchDistanceKm, searchRadiusM, searching } from "../lib/stores";
@@ -14,8 +14,32 @@
    * scrubstart / scrubend: the distance slider was grabbed / released with the pointer.
    * move: the search point moved (any input, including the keyboard).
    * search: the user asked to search around the current point.
+   * cancel: the user asked to stop the running search.
    */
-  const dispatch = createEventDispatcher<{ scrubstart: void; move: void; scrubend: void; search: void }>();
+  const dispatch = createEventDispatcher<{
+    scrubstart: void;
+    move: void;
+    scrubend: void;
+    search: void;
+    cancel: void;
+  }>();
+
+  let searchButton: HTMLButtonElement;
+  let cancelButton: HTMLButtonElement | undefined;
+  let wasSearching = false;
+
+  // Keyboard users keep their place: focus moves to Cancel when a search starts, and back
+  // to Search when it ends - but only if focus was on these buttons to begin with.
+  $: followSearchingState($searching);
+
+  async function followSearchingState(nowSearching: boolean) {
+    if (nowSearching === wasSearching) return;
+    wasSearching = nowSearching;
+    const active = document.activeElement;
+    const focusOnControls = active === searchButton || active === cancelButton || active === document.body;
+    await tick();
+    if (focusOnControls) (nowSearching ? cancelButton : searchButton)?.focus();
+  }
 
   function handleDistanceInput(event: Event & { currentTarget: HTMLInputElement }) {
     moveSearchPoint(Number(event.currentTarget.value));
@@ -65,14 +89,28 @@
     </label>
     <p class="hint">Larger radii take longer: OpenStreetMap returns a lot more data.</p>
 
-    <button
-      type="button"
-      class="primary-button"
-      on:click={() => dispatch("search")}
-      disabled={$searching || !$origin}
-    >
-      {#if $searching}<span class="spinner" aria-hidden="true"></span>Searching…{:else}Search this area{/if}
-    </button>
+    <div class="search-actions">
+      <button
+        bind:this={searchButton}
+        type="button"
+        class="primary-button"
+        on:click={() => dispatch("search")}
+        disabled={$searching || !$origin}
+      >
+        {#if $searching}<span class="spinner" aria-hidden="true"></span>Searching…{:else}Search this area{/if}
+      </button>
+      {#if $searching}
+        <button
+          bind:this={cancelButton}
+          type="button"
+          class="secondary-button"
+          aria-keyshortcuts="Escape"
+          on:click={() => dispatch("cancel")}
+        >
+          Cancel<span class="visually-hidden"> search</span>
+        </button>
+      {/if}
+    </div>
     <StatusMessage />
   </section>
 {/if}

@@ -242,6 +242,57 @@ describe("searching", () => {
   });
 });
 
+describe("cancelling a search", () => {
+  async function startSearch() {
+    const app = await renderApp();
+    await loadSampleRoute(app.user);
+    const searchButton = screen.getByRole("button", { name: /search this area/i });
+    searchButton.focus();
+    await app.user.keyboard("{Enter}");
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: "batch", sites: [site(1), site(2)] });
+    await screen.findByText("2", { selector: ".count" });
+    return app;
+  }
+
+  it("offers a Cancel button, focused, while searching", async () => {
+    await startSearch();
+    const cancel = screen.getByRole("button", { name: "Cancel search" });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+  });
+
+  it("stops the search, keeps the sites found so far and refocuses Search", async () => {
+    const { user } = await startSearch();
+    const socket = FakeSocket.last;
+    await user.click(screen.getByRole("button", { name: "Cancel search" }));
+
+    expect(screen.getByRole("status").textContent?.trim()).toBe("Search cancelled.");
+    expect(screen.queryByRole("button", { name: "Cancel search" })).toBeNull();
+    const searchButton = screen.getByRole("button", { name: /search this area/i });
+    expect(searchButton).toHaveProperty("disabled", false);
+    await waitFor(() => expect(document.activeElement).toBe(searchButton));
+    expect(screen.getByText("2", { selector: ".count" })).toBeTruthy(); // partial results kept
+
+    // Late messages from the closed socket are ignored.
+    socket.receive({ type: "final", sites: [site(1)], refined_ids: [1] });
+    expect(screen.getByText("2", { selector: ".count" })).toBeTruthy();
+  });
+
+  it("can be cancelled with the Escape key", async () => {
+    const { user } = await startSearch();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("status").textContent?.trim()).toBe("Search cancelled.");
+    expect(screen.getByRole("button", { name: /search this area/i })).toHaveProperty("disabled", false);
+  });
+
+  it("ignores Escape when nothing is running", async () => {
+    const { user } = await renderApp();
+    await loadSampleRoute(user);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("status").textContent?.trim()).toBe("");
+  });
+});
+
 describe("selecting a site", () => {
   async function withResults() {
     const app = await renderApp();

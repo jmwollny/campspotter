@@ -1,5 +1,7 @@
 """Websocket API: validates the browser's request and streams the pipeline's messages back."""
 
+import asyncio
+import contextlib
 import logging
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -14,7 +16,7 @@ from models import (
     ServerMessage,
     describe_validation_error,
 )
-from pipeline import run_search
+from pipeline import Emit, run_search
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -39,6 +41,40 @@ async def send(websocket: WebSocket, message: ServerMessage) -> None:
     await websocket.send_json(message.model_dump(mode="json", exclude_none=True))
 
 
+async def wait_for_disconnect(websocket: WebSocket) -> None:
+    """Return when the browser closes the socket (e.g. the user cancelled the search)."""
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+
+
+async def run_until_disconnected(
+    websocket: WebSocket, request: SearchRequest, emit: Emit
+) -> None:
+    """
+    Run the search, but stop as soon as the browser disconnects. Without this the
+    pipeline would carry on querying OpenStreetMap and the LLM for nobody. A stage
+    already running in a worker thread can't be interrupted; it finishes in the
+    background, but no later stage starts.
+    """
+    search = asyncio.create_task(run_search(request, emit))
+    disconnected = asyncio.create_task(wait_for_disconnect(websocket))
+    done, _ = await asyncio.wait(
+        {search, disconnected}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if disconnected in done and not search.done():
+        search.cancel()
+        logger.info("Client disconnected; search cancelled.")
+        with contextlib.suppress(asyncio.CancelledError):
+            await search
+        return
+    disconnected.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await disconnected
+    await search  # re-raises the search's exception, if any
+
+
 @app.websocket("/ws/analyze")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -56,7 +92,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
             )
             return
-        await run_search(request, emit)
+        await run_until_disconnected(websocket, request, emit)
     except WebSocketDisconnect:
         logger.info("Client disconnected before the search finished.")
     except Exception as exc:

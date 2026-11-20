@@ -4,7 +4,7 @@
  */
 import { get } from "svelte/store";
 
-import { applyServerMessage, beginSearch, endSearch, searching, setStatus, status } from "./stores";
+import { applyServerMessage, beginSearch, endSearch, searching, setStatus } from "./stores";
 import type { Bounds, LatLon, RedFlag, SearchRequest, ServerMessage, Site } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ export interface SearchOptions {
 }
 
 export interface SearchHandle {
-  /** Stop the search (e.g. when the page unmounts). */
+  /** Stop the search: closes the socket (the server then stops too) and keeps any sites found so far. */
   cancel(): void;
 }
 
@@ -163,7 +163,7 @@ export function runSearch(
       finished = stopped = true;
       socket.close();
       if (wasFinished) return;
-      if (!get(status).isError) setStatus("");
+      setStatus("Search cancelled.");
     },
   };
 }
