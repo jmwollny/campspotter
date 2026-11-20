@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { get } from "svelte/store";
   import mapboxgl from "mapbox-gl";
-  import { gpx as gpxToGeoJSON } from "@tmcw/togeojson";
   import {
     circlePolygonFeature,
     describeTerrain,
@@ -10,18 +10,35 @@
     formatArea,
     formatDistance,
     formatScore,
-    lineLengthKm,
     lineToNearestPointFeature,
-    pointAlongLine,
     siteShapeFeature,
     siteToFeature,
-    sortFinalSites,
     summariseRedFlags,
     trackBounds,
-    trackLine,
   } from "./lib/geo";
+  import {
+    applyServerMessage,
+    beginSearch,
+    endSearch,
+    loadRoute,
+    loadRouteFromUrl,
+    moveSearchPoint,
+    origin,
+    route,
+    routeError,
+    routeLoading,
+    searchDistanceKm,
+    searchRadiusM,
+    searching,
+    selectSite as setSelectedSite,
+    selectedSiteId,
+    setStatus,
+    sites,
+    status,
+    topPickSet,
+  } from "./lib/stores";
   import type { LatLon, ServerMessage, Site } from "./lib/types";
-  import type { Feature, FeatureCollection, GeoJSON, LineString } from "geojson";
+  import type { FeatureCollection, GeoJSON } from "geojson";
 
   interface SampleRoute {
     file: string;
@@ -50,44 +67,14 @@
   let scoutMarker: mapboxgl.Marker | undefined;
   let popup: mapboxgl.Popup | undefined;
 
-  // Route
-  let routeName = "";
-  let routeError = "";
-  let routeLoading = false;
-  let trackData: FeatureCollection | null = null;
-  let routeLine: Feature<LineString> | null = null;
-  let trackDistanceKm = 0;
-  let searchDistance = 0;
-  let origin: LatLon | null = null; // the search point
-  let searchRadiusM = 500;
   let zoomBeforeScrub: number | null = null;
-
-  // Search
-  let searching = false;
-  let statusMessage = "";
-  let statusIsError = false;
-  let sites: Site[] = [];
-  let refinedIds: number[] = [];
-  let selectedSiteId: number | null = null;
   let listElement: HTMLOListElement;
 
-  let refinedSet: Set<string>;
-  let selectedKey: string | null;
-  $: refinedSet = new Set(refinedIds.map(String));
-  $: selectedKey = selectedSiteId == null ? null : String(selectedSiteId);
-  $: if (mapLoaded) renderLayers(trackData, origin, searchRadiusM, sites, refinedSet, selectedKey);
-
-  const isTopPick = (site: Site) => refinedSet.has(String(site.id));
-
-  function setStatus(message: string, isError = false) {
-    statusMessage = message;
-    statusIsError = isError;
+  $: if (mapLoaded) {
+    renderLayers($route?.geojson ?? null, $origin, $searchRadiusM, $sites, $topPickSet, $selectedSiteId);
   }
 
-  function clearResults() {
-    sites = [];
-    refinedIds = [];
-    selectedSiteId = null;
+  function clearPopup() {
     popup?.remove();
   }
 
@@ -98,54 +85,16 @@
   async function handleFileUpload(event: Event & { currentTarget: HTMLInputElement }) {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
-    loadRoute(await file.text(), file.name);
+    if (loadRoute(await file.text(), file.name)) routeLoaded();
   }
 
   async function loadSampleRoute(sample: SampleRoute) {
-    routeLoading = true;
-    try {
-      const response = await fetch(`/${sample.file}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      loadRoute(await response.text(), sample.label);
-    } catch (error) {
-      routeError = `Couldn't load the ${sample.label} sample (${messageOf(error)}).`;
-    } finally {
-      routeLoading = false;
-    }
+    if (await loadRouteFromUrl(`/${sample.file}`, sample.label)) routeLoaded();
   }
 
-  function loadRoute(text: string, name: string) {
-    routeError = "";
-    let geojson: FeatureCollection;
-    try {
-      const xml = new DOMParser().parseFromString(text, "application/xml");
-      if (xml.querySelector("parsererror")) throw new Error("it isn't valid GPX/XML");
-      geojson = gpxToGeoJSON(xml);
-    } catch (error) {
-      routeError = `Couldn't read ${name}: ${messageOf(error)}.`;
-      return;
-    }
-    const line = trackLine(geojson);
-    if (!line) {
-      routeError = `${name} doesn't contain a track or route to follow.`;
-      return;
-    }
-
-    trackData = geojson;
-    routeLine = line;
-    // Same line (and turf maths) for length and position, so the slider's end is the route's end.
-    trackDistanceKm = Math.floor(lineLengthKm(line) * 10) / 10;
-    routeName = name;
-    searchDistance = 0;
-    clearResults();
-    setStatus("");
-    moveOriginTo(0);
+  function routeLoaded() {
+    clearPopup();
     fitToRoute();
-  }
-
-  function moveOriginTo(km: number) {
-    const coords = pointAlongLine(routeLine, km);
-    origin = coords ? { lat: coords[1], lon: coords[0] } : null;
   }
 
   // ---------------------------------------------------------------------------
@@ -153,24 +102,24 @@
   // ---------------------------------------------------------------------------
 
   function beginScrub() {
-    if (!map || !origin) return;
+    const point = get(origin);
+    if (!map || !point) return;
     zoomBeforeScrub = map.getZoom();
-    map.flyTo({ center: [origin.lon, origin.lat], zoom: Math.max(zoomBeforeScrub, 12), duration: 300 });
+    map.flyTo({ center: [point.lon, point.lat], zoom: Math.max(zoomBeforeScrub, 12), duration: 300 });
   }
 
-  function handleDistanceInput() {
-    moveOriginTo(searchDistance);
-    if (sites.length || statusMessage) {
-      clearResults();
-      setStatus("");
-    }
-    if (map && origin) map.jumpTo({ center: [origin.lon, origin.lat] });
+  function handleDistanceInput(event: Event & { currentTarget: HTMLInputElement }) {
+    moveSearchPoint(Number(event.currentTarget.value));
+    clearPopup();
+    const point = get(origin);
+    if (map && point) map.jumpTo({ center: [point.lon, point.lat] });
   }
 
   function endScrub() {
     // Only zoom back out if the drag started with the pointer (keyboard changes never zoomed in).
-    if (map && origin && zoomBeforeScrub != null) {
-      map.flyTo({ center: [origin.lon, origin.lat], zoom: zoomBeforeScrub, duration: 800 });
+    const point = get(origin);
+    if (map && point && zoomBeforeScrub != null) {
+      map.flyTo({ center: [point.lon, point.lat], zoom: zoomBeforeScrub, duration: 800 });
     }
     zoomBeforeScrub = null;
   }
@@ -180,25 +129,24 @@
   // ---------------------------------------------------------------------------
 
   function startSearch() {
-    if (searching || !origin) return;
-    clearResults();
-    searching = true;
-    setStatus("Connecting to the Campspotter server…");
+    const searchOrigin = get(origin);
+    if (get(searching) || !searchOrigin) return;
+    clearPopup();
+    beginSearch();
     let finished = false;
 
-    const searchOrigin = origin;
     let socket: WebSocket;
     try {
       socket = new WebSocket(`${apiUrl}/ws/analyze`);
     } catch (error) {
-      searching = false;
+      endSearch();
       setStatus(`Invalid server address ${apiUrl}: ${messageOf(error)}`, true);
       return;
     }
 
     socket.onopen = () => {
       socket.send(
-        JSON.stringify({ lat: searchOrigin.lat, lon: searchOrigin.lon, radius: searchRadiusM }),
+        JSON.stringify({ lat: searchOrigin.lat, lon: searchOrigin.lon, radius: get(searchRadiusM) }),
       );
     };
 
@@ -210,21 +158,9 @@
       } catch {
         return;
       }
-      if (data.type === "status") {
-        setStatus(data.msg);
-      } else if (data.type === "batch") {
-        const firstBatch = sites.length === 0;
-        sites = data.sites ?? [];
-        if (firstBatch) fitToResults();
-      } else if (data.type === "final") {
-        refinedIds = data.refined_ids ?? [];
-        sites = sortFinalSites(data.sites ?? [], refinedIds);
-        finished = true;
-        tick().then(fitToResults);
-      } else if (data.type === "error") {
-        setStatus(data.msg, true);
-        finished = true;
-      }
+      const outcome = applyServerMessage(data);
+      if (outcome.done) finished = true;
+      if (outcome.showResults) tick().then(fitToResults);
     };
 
     socket.onerror = () => {
@@ -238,7 +174,7 @@
     };
 
     socket.onclose = () => {
-      searching = false;
+      endSearch();
       if (!finished) setStatus("The server closed the connection before the search finished.", true);
     };
   }
@@ -256,17 +192,17 @@
     searchOrigin: LatLon | null,
     radius: number,
     siteList: Site[],
-    topPicks: Set<string>,
-    selected: string | null,
+    topPicks: Set<number>,
+    selected: number | null,
   ) {
     setSourceData("gpx-track", track ?? featureCollection([]));
 
-    const isTop = (site: Site) => topPicks.has(String(site.id));
+    const isTop = (site: Site) => topPicks.has(site.id);
     setSourceData(
       "sites",
       featureCollection(
         siteList.map((site, index) =>
-          siteToFeature(site, index, { topPick: isTop(site), selected: String(site.id) === selected }),
+          siteToFeature(site, index, { topPick: isTop(site), selected: site.id === selected }),
         ),
       ),
     );
@@ -276,7 +212,7 @@
       featureCollection(
         siteList
           .map((site, index) =>
-            isTop(site) || String(site.id) === selected
+            isTop(site) || site.id === selected
               ? lineToNearestPointFeature(searchOrigin, site, index)
               : null,
           )
@@ -284,7 +220,7 @@
       ),
     );
     setSourceData("site-shapes", featureCollection(siteList.map(siteShapeFeature).filter(isPresent)));
-    const selectedSite = siteList.find((site) => String(site.id) === selected);
+    const selectedSite = siteList.find((site) => site.id === selected);
     const selectedShape = selectedSite ? siteShapeFeature(selectedSite) : null;
     setSourceData("selected-shape", featureCollection(selectedShape ? [selectedShape] : []));
     const circle = circlePolygonFeature(searchOrigin, radius);
@@ -297,14 +233,18 @@
   }
 
   function fitToRoute() {
-    const bounds = trackBounds(trackData);
+    const bounds = trackBounds(get(route)?.geojson);
     if (map && bounds) map.fitBounds(bounds, { padding: 50, duration: 800 });
   }
 
   function fitToResults() {
-    if (!map || !origin || sites.length === 0) return;
-    const focus = sites.some(isTopPick) ? sites.filter(isTopPick) : sites;
-    const bounds = new mapboxgl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
+    const point = get(origin);
+    const siteList = get(sites);
+    if (!map || !point || siteList.length === 0) return;
+    const topPicks = get(topPickSet);
+    const isTopPick = (site: Site) => topPicks.has(site.id);
+    const focus = siteList.some(isTopPick) ? siteList.filter(isTopPick) : siteList;
+    const bounds = new mapboxgl.LngLatBounds([point.lon, point.lat], [point.lon, point.lat]);
     for (const site of focus) bounds.extend([site.lon, site.lat]);
     map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
   }
@@ -354,8 +294,8 @@
 
   async function selectSite(site: Site, { fromMap = false }: { fromMap?: boolean } = {}) {
     if (!site || !map) return;
-    selectedSiteId = site.id;
-    const rank = sites.indexOf(site) + 1;
+    setSelectedSite(site.id);
+    const rank = get(sites).indexOf(site) + 1;
     popup?.remove();
     popup = new mapboxgl.Popup({ maxWidth: "280px", offset: 10 })
       .setLngLat([site.lon, site.lat])
@@ -448,7 +388,7 @@
 
     map.on("click", "sites", (event: mapboxgl.MapMouseEvent) => {
       const id = event.features?.[0]?.properties?.id;
-      const site = sites.find((candidate) => String(candidate.id) === String(id));
+      const site = get(sites).find((candidate) => String(candidate.id) === String(id));
       if (site) selectSite(site, { fromMap: true });
     });
     map.on("mouseenter", "sites", () => (map.getCanvas().style.cursor = "pointer"));
@@ -477,7 +417,7 @@
         scoutMarker = new mapboxgl.Marker({ color: ROUTE_COLOR });
         if (map) addLayers(map);
         mapLoaded = true;
-        if (trackData) fitToRoute(); // route was picked before the map finished loading
+        if (get(route)) fitToRoute(); // route was picked before the map finished loading
       });
       map.on("error", (event) => {
         if ((event?.error as { status?: number } | undefined)?.status === 401) mapError = "Mapbox rejected the access token (VITE_MAPBOX_TOKEN).";
@@ -501,7 +441,7 @@
       <div class="map" bind:this={mapContainer}></div>
       {#if mapError}
         <div class="map-overlay error-text" role="alert">{mapError}</div>
-      {:else if !trackData}
+      {:else if !$route}
         <div class="map-overlay">Load a GPX route to get started.</div>
       {/if}
     </div>
@@ -519,33 +459,33 @@
             {#if i > 0}&nbsp;or&nbsp;{/if}<button
               type="button"
               class="link-button"
-              disabled={routeLoading}
+              disabled={$routeLoading}
               on:click={() => loadSampleRoute(sample)}>{sample.label}</button
             >
           {/each}
         </p>
-        {#if routeError}
-          <p class="error-text" role="alert">{routeError}</p>
-        {:else if routeName}
-          <p class="route-name"><strong>{routeName}</strong> · {trackDistanceKm.toFixed(1)} km</p>
+        {#if $routeError}
+          <p class="error-text" role="alert">{$routeError}</p>
+        {:else if $route}
+          <p class="route-name"><strong>{$route.name}</strong> · {$route.lengthKm.toFixed(1)} km</p>
         {/if}
       </section>
 
-      {#if trackData}
+      {#if $route}
         <section class="panel-section">
           <h2>2. Search point</h2>
           <label class="slider">
             <span class="slider-label">
               Distance along route
-              <output>{searchDistance.toFixed(1)} / {trackDistanceKm.toFixed(1)} km</output>
+              <output>{$searchDistanceKm.toFixed(1)} / {$route.lengthKm.toFixed(1)} km</output>
             </span>
             <input
               type="range"
               min="0"
-              max={trackDistanceKm}
+              max={$route.lengthKm}
               step="0.1"
-              bind:value={searchDistance}
-              disabled={searching}
+              value={$searchDistanceKm}
+              disabled={$searching}
               on:pointerdown={beginScrub}
               on:input={handleDistanceInput}
               on:change={endScrub}
@@ -554,40 +494,40 @@
           <label class="slider">
             <span class="slider-label">
               Search radius
-              <output>{formatDistance(searchRadiusM)}</output>
+              <output>{formatDistance($searchRadiusM)}</output>
             </span>
-            <input type="range" min="100" max="2000" step="50" bind:value={searchRadiusM} disabled={searching} />
+            <input type="range" min="100" max="2000" step="50" bind:value={$searchRadiusM} disabled={$searching} />
           </label>
           <p class="hint">Larger radii take longer: OpenStreetMap returns a lot more data.</p>
 
-          <button type="button" class="primary-button" on:click={startSearch} disabled={searching || !origin}>
-            {#if searching}<span class="spinner" aria-hidden="true"></span>Searching…{:else}Search this area{/if}
+          <button type="button" class="primary-button" on:click={startSearch} disabled={$searching || !$origin}>
+            {#if $searching}<span class="spinner" aria-hidden="true"></span>Searching…{:else}Search this area{/if}
           </button>
-          <p class="status" class:error-text={statusIsError} role="status" aria-live="polite">
-            {statusMessage}
+          <p class="status" class:error-text={$status.isError} role="status" aria-live="polite">
+            {$status.message}
           </p>
         </section>
       {/if}
 
-      {#if sites.length}
+      {#if $sites.length}
         <section class="panel-section results">
-          <h2>3. Candidate sites <span class="count">{sites.length}</span></h2>
+          <h2>3. Candidate sites <span class="count">{$sites.length}</span></h2>
           <p class="legend">
             <span><i style="background:{TOP_PICK_COLOR}"></i>Top pick</span>
             <span><i style="background:{OTHER_SITE_COLOR}"></i>Other woodland</span>
           </p>
           <ol class="site-list" bind:this={listElement}>
-            {#each sites as site, i (site.id)}
+            {#each $sites as site, i (site.id)}
               {@const terrain = describeTerrain(site.terrain_description)}
               {@const flags = summariseRedFlags(site.nearby_red_flags)}
-              {@const topPick = isTopPick(site)}
+              {@const topPick = $topPickSet.has(site.id)}
               <li data-site-id={site.id}>
                 <button
                   type="button"
                   class="site-card"
                   class:top-pick={topPick}
-                  class:selected={String(site.id) === selectedKey}
-                  aria-pressed={String(site.id) === selectedKey}
+                  class:selected={site.id === $selectedSiteId}
+                  aria-pressed={site.id === $selectedSiteId}
                   on:click={() => selectSite(site)}
                 >
                   <span class="rank" aria-label="Rank {i + 1}">{i + 1}</span>
@@ -605,7 +545,7 @@
                     {/if}
                   </span>
                   <span class="score" class:pending={site.suitability_score == null}>
-                    {#if site.suitability_score == null && searching}
+                    {#if site.suitability_score == null && $searching}
                       <span class="spinner small" aria-label="Scoring"></span>
                     {:else}
                       {formatScore(site.suitability_score)}
