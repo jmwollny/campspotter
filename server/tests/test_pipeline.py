@@ -33,9 +33,9 @@ def test_happy_path_emits_every_stage(fake_pipeline):
 
 
 def test_discover_error_is_emitted_and_stops(fake_pipeline, monkeypatch):
-    monkeypatch.setattr(pipeline, "scout_agent_run", lambda o, r: "Overpass is down")
+    monkeypatch.setattr(pipeline, "discover_elements", lambda o, r: "Overpass is down")
     monkeypatch.setattr(
-        pipeline, "build_site_summaries", lambda e, o: pytest.fail("should stop")
+        pipeline, "summarise_sites", lambda e, o: pytest.fail("should stop")
     )
     messages = run(SearchRequest(lat=51.0, lon=-1.0))
     assert messages[-1].type == "error"
@@ -43,9 +43,9 @@ def test_discover_error_is_emitted_and_stops(fake_pipeline, monkeypatch):
 
 
 def test_no_woods_found_is_reported_and_stops(fake_pipeline, monkeypatch):
-    monkeypatch.setattr(pipeline, "build_site_summaries", lambda e, o: [])
+    monkeypatch.setattr(pipeline, "summarise_sites", lambda e, o: [])
     monkeypatch.setattr(
-        pipeline, "llm_wild_camping_criteria", lambda: pytest.fail("LLM not needed")
+        pipeline, "get_camping_criteria", lambda: pytest.fail("LLM not needed")
     )
     messages = run(SearchRequest(lat=51.0, lon=-1.0, radius=300))
     assert messages[-1].type == "error"
@@ -56,6 +56,6 @@ def test_stage_exceptions_propagate_to_the_caller(fake_pipeline, monkeypatch):
     def boom(sites):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(pipeline, "enrich_sites_with_context_metrics", boom)
+    monkeypatch.setattr(pipeline, "enrich_sites", boom)
     with pytest.raises(RuntimeError, match="kaboom"):
         run(SearchRequest(lat=51.0, lon=-1.0))

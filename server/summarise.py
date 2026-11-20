@@ -4,7 +4,7 @@ from typing import Any
 
 import config
 from geo import (
-    calculate_way_area_from_bounds_m2,
+    bbox_area_m2,
     classify_area_size_band,
     distance_to_element_m,
     get_element_coordinate,
@@ -38,7 +38,7 @@ def classify_red_flag(tags: OsmTags) -> str:
     return "BUILDING"
 
 
-def build_site_summaries(
+def summarise_sites(
     elements: list[OsmElement], origin_coordinate: Coordinate | None = None
 ) -> list[SiteRecord]:
     """
@@ -80,7 +80,7 @@ def build_site_summaries(
             if tags.get(key)
         ]
         area_m2 = (
-            calculate_way_area_from_bounds_m2(site_element.get("bounds"))
+            bbox_area_m2(site_element.get("bounds"))
             if site_element.get("type") == "way"
             else None
         )
@@ -152,7 +152,7 @@ def site_sort_key(site: SiteRecord) -> tuple[float, float]:
     )
 
 
-def summarise_red_flags(hazards: list[dict[str, Any]] | None) -> dict[str, int]:
+def count_red_flags_by_type(hazards: list[dict[str, Any]] | None) -> dict[str, int]:
     """{'BUILDING': 3, 'BARRIER': 1} style counts, for the LLM prompt."""
     counts: dict[str, int] = {}
     for hazard in hazards or []:

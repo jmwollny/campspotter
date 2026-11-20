@@ -11,7 +11,7 @@ from overpass import call_overpass_with_retry
 logger = logging.getLogger(__name__)
 
 
-def compute_site_context_metrics_from_elements(
+def road_and_water_distances(
     lat: float, lon: float, elements: list[OsmElement]
 ) -> dict[str, float | None]:
     """Nearest major road / water distances for one site from pre-fetched elements."""
@@ -43,7 +43,7 @@ def compute_site_context_metrics_from_elements(
     }
 
 
-def fetch_context_elements_for_sites(
+def fetch_roads_and_water(
     sites: list[SiteRecord], radius_meters: float = 1200
 ) -> list[OsmElement]:
     """Fetch roads/water once for all candidate sites using a padded bbox query."""
@@ -93,21 +93,17 @@ def fetch_context_elements_for_sites(
     return elements
 
 
-def enrich_sites_with_context_metrics(
+def enrich_sites(
     sites: list[SiteRecord], max_sites: int | None = None, radius_meters: float = 1200
 ) -> list[SiteRecord]:
     """Add road/water distances to the nearest `max_sites` (default: the LLM candidate pool)."""
     max_sites = max_sites or config.get_settings().llm_candidate_pool_size
     target_sites = sites[:max_sites]
-    context_elements = fetch_context_elements_for_sites(
-        target_sites, radius_meters=radius_meters
-    )
+    context_elements = fetch_roads_and_water(target_sites, radius_meters=radius_meters)
     for site in target_sites:
         if site.get("lat") is None or site.get("lon") is None:
             continue
         site.update(
-            compute_site_context_metrics_from_elements(
-                site["lat"], site["lon"], context_elements
-            )
+            road_and_water_distances(site["lat"], site["lon"], context_elements)
         )
     return sites

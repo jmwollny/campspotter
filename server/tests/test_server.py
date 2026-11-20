@@ -74,6 +74,6 @@ def test_unexpected_exception_becomes_error_message(client, fake_pipeline, monke
     def boom(sites):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(pipeline, "enrich_sites_with_context_metrics", boom)
+    monkeypatch.setattr(pipeline, "enrich_sites", boom)
     messages = collect(client, {"lat": 51.0, "lon": -1.0, "radius": 500})
     assert messages[-1] == {"type": "error", "msg": "kaboom"}

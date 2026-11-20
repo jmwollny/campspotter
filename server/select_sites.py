@@ -11,7 +11,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 import config
 from models import SiteRecord
-from summarise import summarise_red_flags
+from summarise import count_red_flags_by_type
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ DEFAULT_CRITERIA = (
 )
 
 
-def compute_heuristic_suitability(site: SiteRecord) -> float:
+def heuristic_score(site: SiteRecord) -> float:
     """Fallback 0-100 suitability score when the LLM is unavailable."""
     score = 50.0
     area_m2 = site.get("area_m2")
@@ -60,9 +60,9 @@ def compute_heuristic_suitability(site: SiteRecord) -> float:
     return max(0.0, min(100.0, round(score, 1)))
 
 
-def apply_heuristic_scores(sites: list[SiteRecord], max_candidates: int) -> list[int]:
+def select_by_heuristic(sites: list[SiteRecord], max_candidates: int) -> list[int]:
     for site in sites:
-        site["suitability_score"] = compute_heuristic_suitability(site)
+        site["suitability_score"] = heuristic_score(site)
         site["suitability_reason"] = "heuristic fallback"
     ranked = sorted(sites, key=lambda site: site["suitability_score"], reverse=True)
     return [site["id"] for site in ranked[:max_candidates]]
@@ -135,7 +135,7 @@ def get_chat_client() -> tuple[OpenAI, str] | None:
     return None
 
 
-def llm_wild_camping_criteria() -> str:
+def get_camping_criteria() -> str:
     """Ask the LLM for wild camping criteria; fall back to a fixed list on any failure."""
     message = (
         "What is the criteria for a good overnight wild camping spot? Make a bulleted list with no "
@@ -167,7 +167,7 @@ def llm_wild_camping_criteria() -> str:
         return DEFAULT_CRITERIA
 
 
-def llm_select_geom_candidates(
+def score_and_select_sites(
     criteria: str, sites: list[SiteRecord], max_candidates: int = 3
 ) -> list[int]:
     """
@@ -184,7 +184,7 @@ def llm_select_geom_candidates(
         f"using model '{chat[1] if chat else None}'."
     )
     if chat is None:
-        return apply_heuristic_scores(candidate_sites, max_candidates)
+        return select_by_heuristic(candidate_sites, max_candidates)
     llm_client, llm_model = chat
 
     prompt_payload = [
@@ -196,7 +196,7 @@ def llm_select_geom_candidates(
             "distance_to_origin_m": site.get("distance_to_bbox_m"),
             "distance_to_major_road_m": site.get("distance_to_major_road_m"),
             "distance_to_water_m": site.get("distance_to_water_m"),
-            "nearby_red_flags": summarise_red_flags(site.get("nearby_red_flags")),
+            "nearby_red_flags": count_red_flags_by_type(site.get("nearby_red_flags")),
         }
         for site in candidate_sites
     ]
@@ -239,7 +239,7 @@ def llm_select_geom_candidates(
             raise ValueError(f"Could not parse LLM response: {content[:300]}")
     except Exception as exc:
         logger.warning(f"LLM selection failed ({exc}); using heuristic fallback.")
-        return apply_heuristic_scores(candidate_sites, max_candidates)
+        return select_by_heuristic(candidate_sites, max_candidates)
 
     eval_map = {}
     for item in parsed.get("evaluations") or []:
@@ -253,7 +253,7 @@ def llm_select_geom_candidates(
             site["suitability_score"] = score
             site["suitability_reason"] = evaluation.get("reason") or ""
         else:
-            site["suitability_score"] = compute_heuristic_suitability(site)
+            site["suitability_score"] = heuristic_score(site)
             site["suitability_reason"] = "heuristic fallback"
 
     # Only accept ids that were actually offered; LLMs sometimes invent or repeat them.

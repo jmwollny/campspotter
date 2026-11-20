@@ -25,7 +25,7 @@ def test_distance_to_element_falls_back_to_point():
 
 
 def test_area_from_bounds_and_size_bands():
-    area = geo.calculate_way_area_from_bounds_m2(
+    area = geo.bbox_area_m2(
         {"minlat": 51.0, "minlon": -1.0, "maxlat": 51.001, "maxlon": -0.999}
     )
     assert area == pytest.approx(111.32 * 70.06, rel=0.01)

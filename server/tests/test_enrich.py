@@ -8,7 +8,7 @@ def test_enrichment_covers_the_whole_llm_pool(monkeypatch):
     monkeypatch.setenv("LLM_CANDIDATE_POOL_SIZE", "12")
     monkeypatch.setattr(
         enrich,
-        "fetch_context_elements_for_sites",
+        "fetch_roads_and_water",
         lambda sites, radius_meters: [
             {
                 "type": "way",
@@ -18,7 +18,7 @@ def test_enrichment_covers_the_whole_llm_pool(monkeypatch):
         ],
     )
     sites = [{"id": i, "lat": 51.0 + i * 0.001, "lon": -1.0} for i in range(15)]
-    enrich.enrich_sites_with_context_metrics(sites)
+    enrich.enrich_sites(sites)
     assert all("distance_to_major_road_m" in s for s in sites[:12])
     assert not any("distance_to_major_road_m" in s for s in sites[12:])
     assert sites[0]["distance_to_major_road_m"] == 0
@@ -34,7 +34,7 @@ def test_context_metrics_pick_nearest_road_and_water():
         },  # ignored
         {"tags": {"waterway": "stream"}, "lat": 51.0, "lon": -1.003},
     ]
-    metrics = enrich.compute_site_context_metrics_from_elements(51.0, -1.0, elements)
+    metrics = enrich.road_and_water_distances(51.0, -1.0, elements)
     assert metrics["distance_to_major_road_m"] == pytest.approx(111.2, abs=0.5)
     assert metrics["distance_to_water_m"] == pytest.approx(210, abs=2)
 
@@ -45,4 +45,4 @@ def test_context_metrics_pick_nearest_road_and_water():
 def test_context_fetch_tolerates_bad_overpass_responses(monkeypatch, response):
     monkeypatch.setattr(enrich, "call_overpass_with_retry", lambda query: response)
     sites = [{"id": 1, "lat": 51.0, "lon": -1.0}]
-    assert enrich.fetch_context_elements_for_sites(sites) == []
+    assert enrich.fetch_roads_and_water(sites) == []

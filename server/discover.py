@@ -8,7 +8,7 @@ from overpass import call_overpass_with_retry
 logger = logging.getLogger(__name__)
 
 
-def get_camping_and_woods(
+def query_woods_and_red_flags(
     lat: float, lon: float, radius_meters: float = 2000
 ) -> OverpassResponse | None:
     """Fetch candidate woodland ("targets") and red flags around a point."""
@@ -48,7 +48,7 @@ def get_camping_and_woods(
     return call_overpass_with_retry(query)
 
 
-def scout_agent_run(
+def discover_elements(
     coordinate: Coordinate | None, radius: float
 ) -> list[OsmElement] | str:
     """Return a list of Overpass elements, or an error string for the UI."""
@@ -58,7 +58,7 @@ def scout_agent_run(
     logger.info(
         f"Running Overpass scout query at lat={coordinate[0]}, lon={coordinate[1]}, radius={radius}m."
     )
-    results = get_camping_and_woods(coordinate[0], coordinate[1], radius)
+    results = query_woods_and_red_flags(coordinate[0], coordinate[1], radius)
 
     if not results:
         logger.error("Scout query failed: no response payload returned from Overpass.")

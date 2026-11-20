@@ -149,7 +149,7 @@ def nearest_point_on_way_geometry(
     )
 
 
-def calculate_way_area_from_bounds_m2(
+def bbox_area_m2(
     bounds: Mapping[str, float] | None,
 ) -> float | None:
     """Fast approximate area (m^2) from an Overpass bounding box (overestimates non-rectangles)."""

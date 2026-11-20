@@ -65,18 +65,16 @@ def fake_pipeline(monkeypatch):
     calls: dict[str, object] = {}
     site = {"id": 7, "type": "way", "lat": 51.0, "lon": -1.0, "distance_to_bbox_m": 10}
 
-    def scout_agent_run(origin, radius):
+    def discover_elements(origin, radius):
         calls["scout"] = (origin, radius)
         return [{"id": 7}]
 
-    monkeypatch.setattr(pipeline, "scout_agent_run", scout_agent_run)
+    monkeypatch.setattr(pipeline, "discover_elements", discover_elements)
     monkeypatch.setattr(
-        pipeline, "build_site_summaries", lambda elements, origin: [dict(site)]
+        pipeline, "summarise_sites", lambda elements, origin: [dict(site)]
     )
-    monkeypatch.setattr(pipeline, "enrich_sites_with_context_metrics", lambda s: s)
-    monkeypatch.setattr(pipeline, "llm_wild_camping_criteria", lambda: "criteria")
-    monkeypatch.setattr(pipeline, "llm_select_geom_candidates", lambda c, s: [7])
-    monkeypatch.setattr(
-        pipeline, "refine_sites_with_way_geometry", lambda s, origin, ids: s
-    )
+    monkeypatch.setattr(pipeline, "enrich_sites", lambda s: s)
+    monkeypatch.setattr(pipeline, "get_camping_criteria", lambda: "criteria")
+    monkeypatch.setattr(pipeline, "score_and_select_sites", lambda c, s: [7])
+    monkeypatch.setattr(pipeline, "add_outlines", lambda s, origin, ids: s)
     return calls

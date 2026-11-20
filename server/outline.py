@@ -11,7 +11,7 @@ from select_sites import to_int_id
 logger = logging.getLogger(__name__)
 
 
-def fetch_way_geometries(way_ids: list[int]) -> dict[int, list[LatLonDict]]:
+def fetch_outlines(way_ids: list[int]) -> dict[int, list[LatLonDict]]:
     """Fetch full geometry for a list of OSM way ids -> {id: [{lat, lon}, ...]}."""
     if not way_ids:
         return {}
@@ -34,7 +34,7 @@ def fetch_way_geometries(way_ids: list[int]) -> dict[int, list[LatLonDict]]:
     }
 
 
-def refine_sites_with_way_geometry(
+def add_outlines(
     sites: list[SiteRecord],
     origin_coordinate: Coordinate | None,
     selected_site_ids: Iterable[int | str],
@@ -49,7 +49,7 @@ def refine_sites_with_way_geometry(
         for site in sites
         if site.get("type") == "way" and site.get("id") in selected_id_set
     ]
-    geometry_by_id = fetch_way_geometries(way_ids)
+    geometry_by_id = fetch_outlines(way_ids)
     if not geometry_by_id:
         return sites
 

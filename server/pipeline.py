@@ -10,8 +10,8 @@ pipeline doesn't know or care that it is talking to a websocket.
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from discover import scout_agent_run
-from enrich import enrich_sites_with_context_metrics
+from discover import discover_elements
+from enrich import enrich_sites
 from models import (
     BatchMessage,
     ErrorMessage,
@@ -20,9 +20,9 @@ from models import (
     ServerMessage,
     StatusMessage,
 )
-from outline import refine_sites_with_way_geometry
-from select_sites import llm_select_geom_candidates, llm_wild_camping_criteria
-from summarise import build_site_summaries
+from outline import add_outlines
+from select_sites import get_camping_criteria, score_and_select_sites
+from summarise import summarise_sites
 
 Emit = Callable[[ServerMessage], Awaitable[None]]
 
@@ -35,12 +35,12 @@ async def run_search(request: SearchRequest, emit: Emit) -> None:
 
     # --- Stage 1 + 2: discover and summarise ---
     await emit(StatusMessage(msg="Retrieving data from OpenStreetMap..."))
-    elements = await asyncio.to_thread(scout_agent_run, origin, radius)
+    elements = await asyncio.to_thread(discover_elements, origin, radius)
     if isinstance(elements, str):  # human-readable error from discover
         await emit(ErrorMessage(msg=elements))
         return
 
-    sites = await asyncio.to_thread(build_site_summaries, elements, origin)
+    sites = await asyncio.to_thread(summarise_sites, elements, origin)
     if not sites:
         await emit(
             ErrorMessage(
@@ -53,17 +53,17 @@ async def run_search(request: SearchRequest, emit: Emit) -> None:
 
     # --- Stage 3: enrich (roads/water) ---
     await emit(StatusMessage(msg="Checking context (roads/water)..."))
-    enriched_sites = await asyncio.to_thread(enrich_sites_with_context_metrics, sites)
+    enriched_sites = await asyncio.to_thread(enrich_sites, sites)
     await emit(BatchMessage.model_validate({"sites": enriched_sites}))
 
     # --- Stage 4 + 5: select and outline ---
     await emit(StatusMessage(msg="Scoring sites and fetching outlines..."))
-    criteria = await asyncio.to_thread(llm_wild_camping_criteria)
+    criteria = await asyncio.to_thread(get_camping_criteria)
     selected_ids = await asyncio.to_thread(
-        llm_select_geom_candidates, criteria, enriched_sites
+        score_and_select_sites, criteria, enriched_sites
     )
     final_sites = await asyncio.to_thread(
-        refine_sites_with_way_geometry, enriched_sites, origin, selected_ids
+        add_outlines, enriched_sites, origin, selected_ids
     )
 
     await emit(
