@@ -1,4 +1,8 @@
 <!-- Step 2: pick the search point and radius, then search. -->
+<!--
+  The visible slider readouts are aria-hidden: each slider announces its own value
+  (aria-valuetext), and <output> is otherwise a live region that would repeat every move.
+-->
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
 
@@ -24,11 +28,14 @@
     <h2>2. Search point</h2>
     <label class="slider">
       <span class="slider-label">
-        Distance along route
-        <output>{$searchDistanceKm.toFixed(1)} / {$route.lengthKm.toFixed(1)} km</output>
+        <span id="distance-label">Distance along route</span>
+        <output for="distance-input" aria-hidden="true">{$searchDistanceKm.toFixed(1)} / {$route.lengthKm.toFixed(1)} km</output>
       </span>
       <input
+        id="distance-input"
         type="range"
+        aria-labelledby="distance-label"
+        aria-valuetext="{$searchDistanceKm.toFixed(1)} of {$route.lengthKm.toFixed(1)} km"
         min="0"
         max={$route.lengthKm}
         step="0.1"
@@ -41,10 +48,20 @@
     </label>
     <label class="slider">
       <span class="slider-label">
-        Search radius
-        <output>{formatDistance($searchRadiusM)}</output>
+        <span id="radius-label">Search radius</span>
+        <output for="radius-input" aria-hidden="true">{formatDistance($searchRadiusM)}</output>
       </span>
-      <input type="range" min="100" max="2000" step="50" bind:value={$searchRadiusM} disabled={$searching} />
+      <input
+        id="radius-input"
+        type="range"
+        aria-labelledby="radius-label"
+        aria-valuetext={formatDistance($searchRadiusM)}
+        min="100"
+        max="2000"
+        step="50"
+        bind:value={$searchRadiusM}
+        disabled={$searching}
+      />
     </label>
     <p class="hint">Larger radii take longer: OpenStreetMap returns a lot more data.</p>
 

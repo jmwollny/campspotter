@@ -14,7 +14,7 @@
   /** Scroll the list so the given site's card is visible. */
   export async function scrollTo(siteId: number) {
     await tick();
-    list?.querySelector(`[data-site-id="${CSS.escape(String(siteId))}"]`)?.scrollIntoView({
+    list?.querySelector(`[data-site-id="${siteId}"]`)?.scrollIntoView({
       block: "nearest",
       behavior: "smooth",
     });
