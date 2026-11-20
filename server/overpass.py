@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import requests
+import urllib3
 
 import config
 from models import OverpassResponse
@@ -39,6 +40,34 @@ def write_overpass_debug_query(text: str | None) -> None:
         debug_file.write((text or "").strip())
         debug_file.write("\n")
     logger.debug(f"Appended Overpass query to {debug_path}")
+
+
+class OverpassTooSlow(Exception):
+    """A mirror kept the response going for longer than OVERPASS_TOTAL_TIMEOUT_S."""
+
+
+def read_body(
+    response: requests.Response, deadline: float, limit: int | None = None
+) -> bytes:
+    """
+    Read a streamed response body, giving up at `deadline` (a time.perf_counter() value).
+
+    The read timeout only limits the gap between packets, so a server that keeps a
+    queued connection alive by sending a few bytes at a time can hold a request open for
+    hours. read1() returns whatever has arrived, so the deadline is checked after every
+    piece, however slowly the data trickles in. `limit` stops early (for error excerpts).
+    """
+    chunks: list[bytes] = []
+    size = 0
+    while limit is None or size < limit:
+        if time.perf_counter() > deadline:
+            raise OverpassTooSlow()
+        chunk = response.raw.read1(64 * 1024, decode_content=True)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
 
 
 def call_overpass_with_retry(query: str) -> OverpassResponse | None:
@@ -79,11 +108,14 @@ def _try_overpass_mirrors(
     settings = config.get_settings()
     retry_min_delay_s = settings.overpass_retry_min_delay_s
     retry_max_delay_s = settings.overpass_retry_max_delay_s
-    # Short connect timeout so a dead mirror fails fast; generous read timeout for big queries.
+    # Short connect timeout so a dead mirror fails fast; generous read timeout for big
+    # queries (the longest silence allowed); and a hard limit on the whole request.
     timeout = (settings.overpass_connect_timeout_s, settings.overpass_read_timeout_s)
+    total_timeout_s = settings.overpass_total_timeout_s
 
     for index, url in enumerate(mirrors):
         mirror_start = time.perf_counter()
+        deadline = mirror_start + total_timeout_s
         try:
             logger.info(f"Overpass request -> {url}")
             response = requests.post(
@@ -95,13 +127,20 @@ def _try_overpass_mirrors(
                     "User-Agent": OVERPASS_USER_AGENT,
                 },
                 timeout=timeout,
+                stream=True,
             )
+            try:
+                ok = response.status_code == 200
+                body = read_body(response, deadline, limit=None if ok else 2000)
+            finally:
+                response.close()
             elapsed = time.perf_counter() - mirror_start
             logger.info(
                 f"Overpass response <- {url} status={response.status_code} elapsed={elapsed:.2f}s"
             )
-            if response.status_code == 200:
-                payload = response.json()
+            text = body.decode("utf-8", errors="replace")
+            if ok:
+                payload = json.loads(body)
                 elements = (
                     payload.get("elements", []) if isinstance(payload, dict) else []
                 )
@@ -111,17 +150,24 @@ def _try_overpass_mirrors(
                 return payload, False
             if response.status_code == 400:
                 # A syntax error will fail on every mirror, so stop here.
-                logger.error(
-                    f"Overpass query syntax error (400): {response.text[:500]}"
-                )
+                logger.error(f"Overpass query syntax error (400): {text[:500]}")
                 return None, False
             logger.warning(
                 f"Overpass mirror returned status={response.status_code} at {url}. "
-                f"Response excerpt: {(response.text or '')[:300]}"
+                f"Response excerpt: {text[:300]}"
+            )
+        except OverpassTooSlow:
+            logger.warning(
+                f"Overpass request to {url} took longer than {total_timeout_s:.0f}s "
+                "(OVERPASS_TOTAL_TIMEOUT_S); giving up on it."
             )
         except requests.exceptions.Timeout as exc:
             logger.warning(f"Overpass request timeout for {url}: {exc}")
-        except requests.exceptions.RequestException as exc:
+        except (
+            requests.exceptions.RequestException,
+            urllib3.exceptions.HTTPError,
+        ) as exc:
+            # urllib3 errors come from reading the streamed body (read timeouts, drops).
             logger.warning(f"Overpass request failed for {url}: {exc}")
         except ValueError as exc:
             logger.warning(f"Overpass response JSON decode failed for {url}: {exc}")

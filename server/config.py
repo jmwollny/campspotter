@@ -34,6 +34,7 @@ ENV_VARS = (
     "OVERPASS_URLS",
     "OVERPASS_CONNECT_TIMEOUT_S",
     "OVERPASS_READ_TIMEOUT_S",
+    "OVERPASS_TOTAL_TIMEOUT_S",
     "OVERPASS_MAX_ROUNDS",
     "OVERPASS_BACKOFF_S",
     "OVERPASS_RETRY_MIN_DELAY_S",
@@ -97,6 +98,7 @@ class Settings:
     overpass_urls: tuple[str, ...] = DEFAULT_OVERPASS_MIRRORS
     overpass_connect_timeout_s: float = 10
     overpass_read_timeout_s: float = 100
+    overpass_total_timeout_s: float = 150
     overpass_max_rounds: int = 3
     overpass_backoff_s: float = 3
     overpass_retry_min_delay_s: float = 0.5
@@ -131,6 +133,9 @@ class Settings:
             ),
             overpass_read_timeout_s=_env_float(
                 "OVERPASS_READ_TIMEOUT_S", defaults.overpass_read_timeout_s
+            ),
+            overpass_total_timeout_s=_env_float(
+                "OVERPASS_TOTAL_TIMEOUT_S", defaults.overpass_total_timeout_s
             ),
             overpass_max_rounds=_env_int(
                 "OVERPASS_MAX_ROUNDS", defaults.overpass_max_rounds, minimum=1
