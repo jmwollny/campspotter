@@ -1,12 +1,27 @@
 // Pure helpers for turning route/site data into GeoJSON. No Svelte or Mapbox here, so they can be unit tested.
 import { along, length, lineString } from "@turf/turf";
+import type {
+  Feature,
+  FeatureCollection,
+  GeoJsonProperties,
+  Geometry,
+  LineString,
+  Point,
+  Polygon,
+  Position,
+} from "geojson";
+
+import type { LatLon, RedFlag, Site } from "./types";
+
+/** [[west, south], [east, north]] */
+export type LngLatBounds = [[number, number], [number, number]];
 
 /**
  * All track/route coordinates from a GeoJSON FeatureCollection, joined into one [lng, lat] list.
  * Handles LineString (GPX routes, single-segment tracks) and MultiLineString (multi-segment tracks).
  */
-export function trackCoordinates(geojson) {
-  const coords = [];
+export function trackCoordinates(geojson: FeatureCollection | null | undefined): Position[] {
+  const coords: Position[] = [];
   for (const feature of geojson?.features ?? []) {
     const geometry = feature?.geometry;
     if (!geometry) continue;
@@ -28,27 +43,32 @@ export function trackCoordinates(geojson) {
 }
 
 /** The whole route as a single turf LineString, or null if it has fewer than two points. */
-export function trackLine(geojson) {
+export function trackLine(geojson: FeatureCollection | null | undefined): Feature<LineString> | null {
   const coords = trackCoordinates(geojson);
   return coords.length >= 2 ? lineString(coords) : null;
 }
 
-export const lineLengthKm = (line) => (line ? length(line, { units: "kilometers" }) : 0);
+export const lineLengthKm = (line: Feature<LineString> | null): number =>
+  line ? length(line, { units: "kilometers" }) : 0;
 
-export const trackLengthKm = (geojson) => lineLengthKm(trackLine(geojson));
+export const trackLengthKm = (geojson: FeatureCollection | null | undefined): number =>
+  lineLengthKm(trackLine(geojson));
 
 /** [lng, lat] at `targetKm` along a turf LineString (clamped to the ends), or null. */
-export function pointAlongLine(line, targetKm) {
+export function pointAlongLine(line: Feature<LineString> | null, targetKm: number): Position | null {
   if (!line) return null;
   const km = Math.max(0, Number(targetKm) || 0);
   return along(line, km, { units: "kilometers" }).geometry.coordinates;
 }
 
 /** [lng, lat] at `targetKm` along the route, or null for an empty route. */
-export const findCoordsAtDistance = (geojson, targetKm) => pointAlongLine(trackLine(geojson), targetKm);
+export const findCoordsAtDistance = (
+  geojson: FeatureCollection | null | undefined,
+  targetKm: number,
+): Position | null => pointAlongLine(trackLine(geojson), targetKm);
 
 /** [[west, south], [east, north]] of the route, or null. */
-export function trackBounds(geojson) {
+export function trackBounds(geojson: FeatureCollection | null | undefined): LngLatBounds | null {
   const coords = trackCoordinates(geojson);
   if (coords.length === 0) return null;
   let [west, south] = coords[0];
@@ -59,18 +79,38 @@ export function trackBounds(geojson) {
     south = Math.min(south, lat);
     north = Math.max(north, lat);
   }
-  return [[west, south], [east, north]];
+  return [
+    [west, south],
+    [east, north],
+  ];
 }
 
-export const featureCollection = (features) => ({ type: "FeatureCollection", features });
+export const featureCollection = <G extends Geometry, P = GeoJsonProperties>(
+  features: Feature<G, P>[],
+): FeatureCollection<G, P> => ({ type: "FeatureCollection", features });
 
-export const siteToFeature = (site, index, { topPick = false, selected = false } = {}) => ({
+export interface SiteFeatureProperties {
+  id: string;
+  rank: number;
+  topPick: boolean;
+  selected: boolean;
+}
+
+export const siteToFeature = (
+  site: Pick<Site, "id" | "lat" | "lon">,
+  index: number,
+  { topPick = false, selected = false }: { topPick?: boolean; selected?: boolean } = {},
+): Feature<Point, SiteFeatureProperties> => ({
   type: "Feature",
   properties: { id: String(site.id ?? ""), rank: index + 1, topPick, selected },
   geometry: { type: "Point", coordinates: [site.lon, site.lat] },
 });
 
-export function lineToNearestPointFeature(origin, site, index) {
+export function lineToNearestPointFeature(
+  origin: LatLon | null | undefined,
+  site: Pick<Site, "id" | "nearest_bbox_point">,
+  index: number,
+): Feature<LineString, { id: string; rank: number }> | null {
   if (!origin || !site.nearest_bbox_point) return null;
   return {
     type: "Feature",
@@ -86,10 +126,12 @@ export function lineToNearestPointFeature(origin, site, index) {
 }
 
 /** The site's real outline when the server fetched one, otherwise its bounding box. */
-export function siteShapeFeature(site) {
+export function siteShapeFeature(
+  site: Pick<Site, "id" | "geometry" | "bounds">,
+): Feature<Polygon | LineString, { id: string }> | null {
   const properties = { id: String(site.id ?? "") };
   if (Array.isArray(site.geometry) && site.geometry.length >= 2) {
-    const coordinates = site.geometry.map((point) => [point.lon, point.lat]);
+    const coordinates: Position[] = site.geometry.map((point) => [point.lon, point.lat]);
     const first = coordinates[0];
     const last = coordinates[coordinates.length - 1];
     const isClosed = first[0] === last[0] && first[1] === last[1];
@@ -109,20 +151,28 @@ export function siteShapeFeature(site) {
     properties,
     geometry: {
       type: "Polygon",
-      coordinates: [[
-        [b.minlon, b.minlat],
-        [b.maxlon, b.minlat],
-        [b.maxlon, b.maxlat],
-        [b.minlon, b.maxlat],
-        [b.minlon, b.minlat],
-      ]],
+      coordinates: [
+        [
+          [b.minlon, b.minlat],
+          [b.maxlon, b.minlat],
+          [b.maxlon, b.maxlat],
+          [b.minlon, b.maxlat],
+          [b.minlon, b.minlat],
+        ],
+      ],
     },
   };
 }
 
 /** Geodesic circle polygon (for the search radius), or null without a usable origin/radius. */
-export function circlePolygonFeature(origin, radiusMeters, steps = 64) {
-  if (!origin || origin.lat == null || origin.lon == null || !(radiusMeters > 0)) return null;
+export function circlePolygonFeature(
+  origin: LatLon | null | undefined,
+  radiusMeters: number | null | undefined,
+  steps = 64,
+): Feature<Polygon, { radius_m: number }> | null {
+  if (!origin || origin.lat == null || origin.lon == null || !radiusMeters || radiusMeters <= 0) {
+    return null;
+  }
   const earthRadiusM = 6371000;
   const latRad = (origin.lat * Math.PI) / 180;
   const lonRad = (origin.lon * Math.PI) / 180;
@@ -131,7 +181,7 @@ export function circlePolygonFeature(origin, radiusMeters, steps = 64) {
   const cosLat = Math.cos(latRad);
   const sinAng = Math.sin(angularDistance);
   const cosAng = Math.cos(angularDistance);
-  const ring = [];
+  const ring: Position[] = [];
 
   for (let i = 0; i <= steps; i += 1) {
     const bearing = (2 * Math.PI * i) / steps;
@@ -150,9 +200,12 @@ export function circlePolygonFeature(origin, radiusMeters, steps = 64) {
 }
 
 /** Final ordering: the server's top picks first (in the server's order), then by score, high to low. */
-export function sortFinalSites(sites, refinedIds) {
+export function sortFinalSites<T extends Pick<Site, "id" | "suitability_score">>(
+  sites: T[],
+  refinedIds: (number | string)[] | null | undefined,
+): T[] {
   const refinedOrder = new Map((refinedIds ?? []).map((id, index) => [String(id), index]));
-  const score = (site) => (typeof site.suitability_score === "number" ? site.suitability_score : -1);
+  const score = (site: T) => (typeof site.suitability_score === "number" ? site.suitability_score : -1);
   return [...sites].sort((a, b) => {
     const aRank = refinedOrder.get(String(a.id));
     const bRank = refinedOrder.get(String(b.id));
@@ -167,47 +220,58 @@ export function sortFinalSites(sites, refinedIds) {
 // Formatting
 // ---------------------------------------------------------------------------
 
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
 /** Escape text before putting it into popup HTML (OSM names and LLM reasons are untrusted). */
-export function escapeHtml(value) {
-  return String(value ?? "").replace(
-    /[&<>"']/g,
-    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char],
-  );
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
 }
 
-const NBSP = "\u00a0"; // keeps "85 m" together when the line wraps
+const NBSP = " "; // keeps "85 m" together when the line wraps
 
-export function formatDistance(meters) {
+export function formatDistance(meters: number | null | undefined): string {
   if (typeof meters !== "number" || !Number.isFinite(meters)) return "n/a";
   if (meters < 1000) return `${Math.round(meters)}${NBSP}m`;
   return `${(meters / 1000).toFixed(1)}${NBSP}km`;
 }
 
-export function formatArea(squareMeters) {
+export function formatArea(squareMeters: number | null | undefined): string {
   if (typeof squareMeters !== "number" || !Number.isFinite(squareMeters)) return "n/a";
   if (squareMeters >= 10000) return `${(squareMeters / 10000).toFixed(1)}${NBSP}ha`;
   return `${Math.round(squareMeters).toLocaleString("en-GB")}${NBSP}m²`;
 }
 
-export function formatScore(score) {
+export function formatScore(score: number | null | undefined): string {
   return typeof score === "number" && Number.isFinite(score) ? `${Math.round(score)}%` : "–";
 }
 
 /** "natural:wood, name:Foxley Copse" -> { kind: "Wood", name: "Foxley Copse" } */
-export function describeTerrain(terrainDescription) {
-  const parts = Object.fromEntries(
+export function describeTerrain(terrainDescription: string | null | undefined): {
+  kind: string;
+  name: string;
+} {
+  const parts: Record<string, string> = Object.fromEntries(
     String(terrainDescription ?? "")
       .split(",")
       .map((part) => part.trim().split(":"))
       .filter((pair) => pair.length >= 2)
       .map(([key, ...rest]) => [key, rest.join(":")]),
   );
-  const rawKind = parts.landuse === "forest" ? "forest" : parts.natural || parts.tourism || parts.landuse || "";
-  const kind = rawKind ? rawKind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : "Unknown terrain";
+  const rawKind =
+    parts.landuse === "forest" ? "forest" : parts.natural || parts.tourism || parts.landuse || "";
+  const kind = rawKind
+    ? rawKind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+    : "Unknown terrain";
   return { kind, name: parts.name ?? "" };
 }
 
-const RED_FLAG_LABELS = {
+const RED_FLAG_LABELS: Record<string, string> = {
   RESIDENTIAL: "residential area",
   PARKING: "car park",
   SEWAGE_WORKS: "sewage works",
@@ -217,8 +281,8 @@ const RED_FLAG_LABELS = {
 };
 
 /** Short summary of red flags, e.g. "3 buildings, 1 barrier". */
-export function summariseRedFlags(flags) {
-  const counts = new Map();
+export function summariseRedFlags(flags: Pick<RedFlag, "type">[] | null | undefined): string {
+  const counts = new Map<string, number>();
   for (const flag of flags ?? []) {
     const rawType = String(flag?.type ?? "OTHER").toUpperCase();
     const type = RED_FLAG_LABELS[rawType] ?? rawType.toLowerCase().replace(/_/g, " ");

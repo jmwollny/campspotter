@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { gpx } from "@tmcw/togeojson";
+import type { Feature, FeatureCollection, LineString, Position } from "geojson";
 import kingAlfredsWayGpx from "../../public/king-alfreds-way-full-route.gpx?raw";
 import {
   circlePolygonFeature,
@@ -20,40 +21,60 @@ import {
   trackCoordinates,
   trackLengthKm,
   trackLine,
-} from "./geo.js";
+} from "./geo";
 
-const parseGpx = (text) => gpx(new DOMParser().parseFromString(text, "application/xml"));
-const line = (coordinates) => ({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } });
-const collection = (...features) => ({ type: "FeatureCollection", features });
+const parseGpx = (text: string) => gpx(new DOMParser().parseFromString(text, "application/xml"));
+const line = (coordinates: Position[]): Feature<LineString> => ({
+  type: "Feature",
+  properties: {},
+  geometry: { type: "LineString", coordinates },
+});
+const collection = (...features: Feature[]): FeatureCollection => ({ type: "FeatureCollection", features });
+
+/** The value, failing the test if it is null/undefined. */
+function must<T>(value: T | null | undefined): T {
+  expect(value).not.toBeNull();
+  expect(value).toBeDefined();
+  return value as T;
+}
 
 describe("route geometry", () => {
   const straight = collection(line([[0, 51], [0, 52]])); // ~111 km due north
 
   it("measures and walks along a route", () => {
     expect(trackLengthKm(straight)).toBeCloseTo(111.2, 0);
-    const [lng, lat] = findCoordsAtDistance(straight, 55.6);
+    const [lng, lat] = must(findCoordsAtDistance(straight, 55.6));
     expect(lng).toBeCloseTo(0, 6);
     expect(lat).toBeCloseTo(51.5, 2);
   });
 
   it("clamps distances to the ends of the route", () => {
     expect(findCoordsAtDistance(straight, -5)).toEqual([0, 51]);
-    expect(findCoordsAtDistance(straight, 999)[1]).toBeCloseTo(52, 6);
+    expect(must(findCoordsAtDistance(straight, 999))[1]).toBeCloseTo(52, 6);
   });
 
   it("joins LineStrings and MultiLineStrings and ignores waypoints", () => {
     const geojson = collection(
       line([[0, 0], [1, 0]]),
-      { type: "Feature", geometry: { type: "MultiLineString", coordinates: [[[1, 0], [2, 0]], [[2, 0], [3, 0]]] } },
-      { type: "Feature", geometry: { type: "Point", coordinates: [9, 9] } },
-      { type: "Feature", geometry: null },
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "MultiLineString", coordinates: [[[1, 0], [2, 0]], [[2, 0], [3, 0]]] },
+      },
+      { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [9, 9] } },
+      // Invalid per the GeoJSON types, but GPX converters can produce it.
+      { type: "Feature", properties: {}, geometry: null } as unknown as Feature,
     );
     expect(trackCoordinates(geojson)).toHaveLength(6);
     expect(trackBounds(geojson)).toEqual([[0, 0], [3, 0]]);
   });
 
   it("returns null/0 for routes without a line", () => {
-    const waypointsOnly = collection({ type: "Feature", geometry: { type: "Point", coordinates: [0, 0] } });
+    const waypointsOnly = collection({
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Point", coordinates: [0, 0] },
+    });
     expect(trackLine(waypointsOnly)).toBeNull();
     expect(trackLengthKm(waypointsOnly)).toBe(0);
     expect(findCoordsAtDistance(waypointsOnly, 1)).toBeNull();
@@ -61,9 +82,9 @@ describe("route geometry", () => {
   });
 
   it("puts the end of the slider exactly at the end of the route", () => {
-    const route = trackLine(collection(line([[0, 51], [0.5, 51.2], [1, 51]])));
-    const end = route.geometry.coordinates.at(-1);
-    const [lng, lat] = findCoordsAtDistance(collection(route), lineLengthKm(route));
+    const route = must(trackLine(collection(line([[0, 51], [0.5, 51.2], [1, 51]]))));
+    const end = must(route.geometry.coordinates.at(-1));
+    const [lng, lat] = must(findCoordsAtDistance(collection(route), lineLengthKm(route)));
     expect(lng).toBeCloseTo(end[0], 6);
     expect(lat).toBeCloseTo(end[1], 6);
   });
@@ -79,7 +100,7 @@ describe("bundled sample route", () => {
     expect(km).toBeLessThan(maxKm);
     // Every point along the route must lie on the route (the baseline app once drew the marker off-route).
     const coords = trackCoordinates(geojson);
-    const [lng, lat] = findCoordsAtDistance(geojson, km / 4);
+    const [lng, lat] = must(findCoordsAtDistance(geojson, km / 4));
     const nearest = Math.min(...coords.map(([x, y]) => Math.hypot(x - lng, y - lat)));
     expect(nearest).toBeLessThan(0.02);
   });
@@ -103,23 +124,23 @@ describe("map features", () => {
   });
 
   it("draws a line from the origin to the nearest point", () => {
-    const feature = lineToNearestPointFeature({ lat: 51, lon: -1 }, site, 2);
+    const feature = must(lineToNearestPointFeature({ lat: 51, lon: -1 }, site, 2));
     expect(feature.geometry.coordinates).toEqual([[-1, 51], [-1.2, 51.101]]);
     expect(lineToNearestPointFeature(null, site, 0)).toBeNull();
     expect(lineToNearestPointFeature({ lat: 51, lon: -1 }, { id: 1 }, 0)).toBeNull();
   });
 
   it("uses the real outline when present, else the bounding box", () => {
-    expect(siteShapeFeature(site).geometry.coordinates[0]).toHaveLength(5);
+    expect(must(siteShapeFeature(site)).geometry.coordinates[0]).toHaveLength(5);
     const closed = [[0, 0], [1, 0], [1, 1], [0, 0]].map(([lon, lat]) => ({ lat, lon }));
-    expect(siteShapeFeature({ ...site, geometry: closed }).geometry.type).toBe("Polygon");
+    expect(must(siteShapeFeature({ ...site, geometry: closed })).geometry.type).toBe("Polygon");
     const open = closed.slice(0, 3);
-    expect(siteShapeFeature({ ...site, geometry: open }).geometry.type).toBe("LineString");
+    expect(must(siteShapeFeature({ ...site, geometry: open })).geometry.type).toBe("LineString");
     expect(siteShapeFeature({ id: 1 })).toBeNull();
   });
 
   it("draws a closed circle of the right radius", () => {
-    const circle = circlePolygonFeature({ lat: 51, lon: -1 }, 1000, 32);
+    const circle = must(circlePolygonFeature({ lat: 51, lon: -1 }, 1000, 32));
     const ring = circle.geometry.coordinates[0];
     expect(ring).toHaveLength(33);
     expect(ring[0]).toEqual(ring.at(-1));
@@ -152,7 +173,7 @@ describe("formatting", () => {
   });
 
   it("formats distances, areas and scores", () => {
-    const nb = (s) => s.replace(/ /g, "\u00a0");
+    const nb = (s: string) => s.replace(/ /g, "\u00a0");
     expect(formatDistance(0)).toBe(nb("0 m"));
     expect(formatDistance(527.4)).toBe(nb("527 m"));
     expect(formatDistance(1520)).toBe(nb("1.5 km"));

@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { onMount, tick } from "svelte";
   import mapboxgl from "mapbox-gl";
   import { gpx as gpxToGeoJSON } from "@tmcw/togeojson";
@@ -19,11 +19,22 @@
     summariseRedFlags,
     trackBounds,
     trackLine,
-  } from "./lib/geo.js";
+  } from "./lib/geo";
+  import type { LatLon, ServerMessage, Site } from "./lib/types";
+  import type { Feature, FeatureCollection, GeoJSON, LineString } from "geojson";
+
+  interface SampleRoute {
+    file: string;
+    label: string;
+  }
+
+  /** The message of an Error, or the value itself as text. */
+  const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  const isPresent = <T,>(value: T | null | undefined): value is T => value != null;
 
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
   const apiUrl = (import.meta.env.VITE_API_WS_URL || "ws://localhost:8000").replace(/\/+$/, "");
-  const SAMPLE_ROUTES = [
+  const SAMPLE_ROUTES: SampleRoute[] = [
     { file: "king-alfreds-way-full-route.gpx", label: "King Alfred's Way" },
     { file: "GBDIVIDE_v400.gpx", label: "GB Divide" },
   ];
@@ -32,41 +43,43 @@
   const ROUTE_COLOR = "#2563eb";
 
   // Map
-  let mapContainer;
-  let map;
+  let mapContainer: HTMLDivElement;
+  let map: mapboxgl.Map | undefined;
   let mapLoaded = false;
   let mapError = "";
-  let scoutMarker;
-  let popup;
+  let scoutMarker: mapboxgl.Marker | undefined;
+  let popup: mapboxgl.Popup | undefined;
 
   // Route
   let routeName = "";
   let routeError = "";
   let routeLoading = false;
-  let trackData = null;
-  let routeLine = null;
+  let trackData: FeatureCollection | null = null;
+  let routeLine: Feature<LineString> | null = null;
   let trackDistanceKm = 0;
   let searchDistance = 0;
-  let origin = null; // { lat, lon } of the search point
+  let origin: LatLon | null = null; // the search point
   let searchRadiusM = 500;
-  let zoomBeforeScrub = null;
+  let zoomBeforeScrub: number | null = null;
 
   // Search
   let searching = false;
   let statusMessage = "";
   let statusIsError = false;
-  let sites = [];
-  let refinedIds = [];
-  let selectedSiteId = null;
-  let listElement;
+  let sites: Site[] = [];
+  let refinedIds: number[] = [];
+  let selectedSiteId: number | null = null;
+  let listElement: HTMLOListElement;
 
+  let refinedSet: Set<string>;
+  let selectedKey: string | null;
   $: refinedSet = new Set(refinedIds.map(String));
   $: selectedKey = selectedSiteId == null ? null : String(selectedSiteId);
   $: if (mapLoaded) renderLayers(trackData, origin, searchRadiusM, sites, refinedSet, selectedKey);
 
-  const isTopPick = (site) => refinedSet.has(String(site.id));
+  const isTopPick = (site: Site) => refinedSet.has(String(site.id));
 
-  function setStatus(message, isError = false) {
+  function setStatus(message: string, isError = false) {
     statusMessage = message;
     statusIsError = isError;
   }
@@ -82,34 +95,34 @@
   // Route loading
   // ---------------------------------------------------------------------------
 
-  async function handleFileUpload(event) {
+  async function handleFileUpload(event: Event & { currentTarget: HTMLInputElement }) {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
     loadRoute(await file.text(), file.name);
   }
 
-  async function loadSampleRoute(sample) {
+  async function loadSampleRoute(sample: SampleRoute) {
     routeLoading = true;
     try {
       const response = await fetch(`/${sample.file}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       loadRoute(await response.text(), sample.label);
     } catch (error) {
-      routeError = `Couldn't load the ${sample.label} sample (${error.message}).`;
+      routeError = `Couldn't load the ${sample.label} sample (${messageOf(error)}).`;
     } finally {
       routeLoading = false;
     }
   }
 
-  function loadRoute(text, name) {
+  function loadRoute(text: string, name: string) {
     routeError = "";
-    let geojson;
+    let geojson: FeatureCollection;
     try {
       const xml = new DOMParser().parseFromString(text, "application/xml");
       if (xml.querySelector("parsererror")) throw new Error("it isn't valid GPX/XML");
       geojson = gpxToGeoJSON(xml);
     } catch (error) {
-      routeError = `Couldn't read ${name}: ${error.message}.`;
+      routeError = `Couldn't read ${name}: ${messageOf(error)}.`;
       return;
     }
     const line = trackLine(geojson);
@@ -130,7 +143,7 @@
     fitToRoute();
   }
 
-  function moveOriginTo(km) {
+  function moveOriginTo(km: number) {
     const coords = pointAlongLine(routeLine, km);
     origin = coords ? { lat: coords[1], lon: coords[0] } : null;
   }
@@ -173,23 +186,27 @@
     setStatus("Connecting to the Campspotter server…");
     let finished = false;
 
-    let socket;
+    const searchOrigin = origin;
+    let socket: WebSocket;
     try {
       socket = new WebSocket(`${apiUrl}/ws/analyze`);
     } catch (error) {
       searching = false;
-      setStatus(`Invalid server address ${apiUrl}: ${error.message}`, true);
+      setStatus(`Invalid server address ${apiUrl}: ${messageOf(error)}`, true);
       return;
     }
 
     socket.onopen = () => {
-      socket.send(JSON.stringify({ lat: origin.lat, lon: origin.lon, radius: searchRadiusM }));
+      socket.send(
+        JSON.stringify({ lat: searchOrigin.lat, lon: searchOrigin.lon, radius: searchRadiusM }),
+      );
     };
 
-    socket.onmessage = (event) => {
-      let data;
+    socket.onmessage = (event: MessageEvent<string>) => {
+      let data: ServerMessage;
       try {
-        data = JSON.parse(event.data);
+        // Step 12 replaces this cast with a runtime check of the message shape.
+        data = JSON.parse(event.data) as ServerMessage;
       } catch {
         return;
       }
@@ -230,14 +247,21 @@
   // Map
   // ---------------------------------------------------------------------------
 
-  function setSourceData(id, data) {
-    map?.getSource(id)?.setData(data);
+  function setSourceData(id: string, data: GeoJSON) {
+    map?.getSource<mapboxgl.GeoJSONSource>(id)?.setData(data);
   }
 
-  function renderLayers(track, searchOrigin, radius, siteList, topPicks, selected) {
+  function renderLayers(
+    track: FeatureCollection | null,
+    searchOrigin: LatLon | null,
+    radius: number,
+    siteList: Site[],
+    topPicks: Set<string>,
+    selected: string | null,
+  ) {
     setSourceData("gpx-track", track ?? featureCollection([]));
 
-    const isTop = (site) => topPicks.has(String(site.id));
+    const isTop = (site: Site) => topPicks.has(String(site.id));
     setSourceData(
       "sites",
       featureCollection(
@@ -256,17 +280,17 @@
               ? lineToNearestPointFeature(searchOrigin, site, index)
               : null,
           )
-          .filter(Boolean),
+          .filter(isPresent),
       ),
     );
-    setSourceData("site-shapes", featureCollection(siteList.map(siteShapeFeature).filter(Boolean)));
+    setSourceData("site-shapes", featureCollection(siteList.map(siteShapeFeature).filter(isPresent)));
     const selectedSite = siteList.find((site) => String(site.id) === selected);
     const selectedShape = selectedSite ? siteShapeFeature(selectedSite) : null;
     setSourceData("selected-shape", featureCollection(selectedShape ? [selectedShape] : []));
     const circle = circlePolygonFeature(searchOrigin, radius);
     setSourceData("search-radius", featureCollection(circle ? [circle] : []));
 
-    if (scoutMarker) {
+    if (scoutMarker && map) {
       if (searchOrigin) scoutMarker.setLngLat([searchOrigin.lon, searchOrigin.lat]).addTo(map);
       else scoutMarker.remove();
     }
@@ -285,20 +309,22 @@
     map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
   }
 
-  function zoomToSite(site) {
+  function zoomToSite(site: Site) {
+    if (!map) return;
     const shape = siteShapeFeature(site);
     const points =
       shape?.geometry.type === "Polygon" ? shape.geometry.coordinates[0] : (shape?.geometry.coordinates ?? []);
-    if (points.length) {
-      const bounds = new mapboxgl.LngLatBounds(points[0], points[0]);
-      for (const point of points) bounds.extend(point);
+    const lngLats = points.map(([lng, lat]) => [lng, lat] as [number, number]);
+    if (lngLats.length) {
+      const bounds = new mapboxgl.LngLatBounds(lngLats[0], lngLats[0]);
+      for (const point of lngLats) bounds.extend(point);
       map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 700 });
     } else {
       map.easeTo({ center: [site.lon, site.lat], zoom: 16, duration: 700 });
     }
   }
 
-  function popupHtml(site, rank) {
+  function popupHtml(site: Site, rank: number) {
     const { kind, name } = describeTerrain(site.terrain_description);
     const reason =
       site.suitability_reason && site.suitability_reason !== "heuristic fallback" ? site.suitability_reason : "";
@@ -326,7 +352,7 @@
       </div>`;
   }
 
-  async function selectSite(site, { fromMap = false } = {}) {
+  async function selectSite(site: Site, { fromMap = false }: { fromMap?: boolean } = {}) {
     if (!site || !map) return;
     selectedSiteId = site.id;
     const rank = sites.indexOf(site) + 1;
@@ -346,7 +372,7 @@
     }
   }
 
-  function addLayers() {
+  function addLayers(map: mapboxgl.Map) {
     const empty = featureCollection([]);
     for (const id of ["search-radius", "gpx-track", "site-shapes", "selected-shape", "nearest-lines", "sites"]) {
       map.addSource(id, { type: "geojson", data: empty });
@@ -420,7 +446,7 @@
       paint: { "text-color": "#ffffff" },
     });
 
-    map.on("click", "sites", (event) => {
+    map.on("click", "sites", (event: mapboxgl.MapMouseEvent) => {
       const id = event.features?.[0]?.properties?.id;
       const site = sites.find((candidate) => String(candidate.id) === String(id));
       if (site) selectSite(site, { fromMap: true });
@@ -445,16 +471,16 @@
       });
       map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new mapboxgl.ScaleControl({ unit: "metric" }), "bottom-left");
-      if (import.meta.env.DEV) /** @type {any} */ (window).__map = map; // handy for debugging and UI scripts
+      if (import.meta.env.DEV) (window as unknown as { __map: mapboxgl.Map }).__map = map; // handy for debugging and UI scripts
 
       map.on("load", () => {
         scoutMarker = new mapboxgl.Marker({ color: ROUTE_COLOR });
-        addLayers();
+        if (map) addLayers(map);
         mapLoaded = true;
         if (trackData) fitToRoute(); // route was picked before the map finished loading
       });
       map.on("error", (event) => {
-        if (/** @type {any} */ (event?.error)?.status === 401) mapError = "Mapbox rejected the access token (VITE_MAPBOX_TOKEN).";
+        if ((event?.error as { status?: number } | undefined)?.status === 401) mapError = "Mapbox rejected the access token (VITE_MAPBOX_TOKEN).";
       });
     } catch (error) {
       mapError = error instanceof Error ? error.message : "Failed to initialise the map.";
