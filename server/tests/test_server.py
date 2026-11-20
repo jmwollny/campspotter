@@ -3,6 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import models
 import server
 
 
@@ -66,7 +67,7 @@ def test_happy_path_streams_all_waves(client, fake_pipeline):
 
 @pytest.mark.parametrize(
     "radius, expected",
-    [(5, server.MIN_RADIUS_M), (10**9, server.MAX_RADIUS_M), ("750", 750)],
+    [(5, models.MIN_RADIUS_M), (10**9, models.MAX_RADIUS_M), ("750", 750)],
 )
 def test_radius_is_clamped(client, fake_pipeline, radius, expected):
     collect(client, {"lat": 51.0, "lon": -1.0, "radius": radius})

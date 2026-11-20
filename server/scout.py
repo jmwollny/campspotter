@@ -13,35 +13,24 @@ Campspotter scouting pipeline.
 import json
 import logging
 import math
-import os
 import random
 import time
 from itertools import pairwise
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 from openai import OpenAI
 
-load_dotenv()
+from config import get_settings
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    level=get_settings().log_level,
     format="%(asctime)s [%(levelname)s] %(message)s",
     force=True,
 )
 logger = logging.getLogger(__name__)
 
-# overpass.kumi.systems used to be first but often hangs until the read timeout (and has returned
-# incomplete results); add it back via OVERPASS_URLS if you want a third mirror.
-DEFAULT_OVERPASS_MIRRORS = (
-    "https://overpass-api.de/api/interpreter",
-    "https://lz4.overpass-api.de/api/interpreter",
-)
 OVERPASS_USER_AGENT = "campspotter/1.0 (+https://github.com/jmwollny/campspotter)"
-
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-DEFAULT_OLLAMA_MODEL = "gemma4:e2b"
 
 TARGET_NATURAL_VALUES = {"wood", "tree_group"}
 
@@ -54,25 +43,9 @@ DEFAULT_CRITERIA = (
 )
 
 
-def env_int(name, default):
-    try:
-        return int(os.getenv(name, default))
-    except (TypeError, ValueError):
-        logger.warning(f"Ignoring invalid {name}={os.getenv(name)!r}; using {default}.")
-        return default
-
-
-def env_float(name, default):
-    try:
-        return float(os.getenv(name, default))
-    except (TypeError, ValueError):
-        logger.warning(f"Ignoring invalid {name}={os.getenv(name)!r}; using {default}.")
-        return default
-
-
 def candidate_pool_size():
     """How many of the nearest sites get enriched and sent to the LLM."""
-    return max(1, env_int("LLM_CANDIDATE_POOL_SIZE", 10))
+    return get_settings().llm_candidate_pool_size
 
 
 # --------------------------------------------------------------------------- #
@@ -81,10 +54,9 @@ def candidate_pool_size():
 
 
 def get_overpass_mirrors():
-    configured = [
-        url.strip() for url in os.getenv("OVERPASS_URLS", "").split(",") if url.strip()
-    ]
-    return configured or list(DEFAULT_OVERPASS_MIRRORS)
+    # overpass.kumi.systems is not a default: it often hangs until the read timeout and
+    # has returned incomplete results. Add it via OVERPASS_URLS if you want it.
+    return list(get_settings().overpass_urls)
 
 
 def sleep_with_jitter(min_seconds=0.5, max_seconds=1.5):
@@ -95,7 +67,7 @@ def sleep_with_jitter(min_seconds=0.5, max_seconds=1.5):
 
 def write_overpass_debug_query(text):
     """Append Overpass queries/responses to a file for copy/paste debugging (DEBUG only)."""
-    debug_filename = os.getenv("OVERPASS_QUERY_DEBUG_FILE", "overpass_query_log.txt")
+    debug_filename = get_settings().overpass_query_debug_file
     debug_path = Path(__file__).resolve().parent / debug_filename
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with debug_path.open("a", encoding="utf-8") as debug_file:
@@ -112,9 +84,10 @@ def call_overpass_with_retry(query):
     exponentially, so the mirror list is retried for OVERPASS_MAX_ROUNDS rounds with a
     doubling pause (OVERPASS_BACKOFF_S, 2x, 4x...) between rounds.
     """
+    settings = get_settings()
     mirrors = get_overpass_mirrors()
-    max_rounds = max(1, env_int("OVERPASS_MAX_ROUNDS", 3))
-    backoff_s = env_float("OVERPASS_BACKOFF_S", 3)
+    max_rounds = settings.overpass_max_rounds
+    backoff_s = settings.overpass_backoff_s
     logger.info(
         f"Overpass request starting across {len(mirrors)} mirrors (query_size={len(query or '')} chars)."
     )
@@ -137,13 +110,11 @@ def call_overpass_with_retry(query):
 
 def _try_overpass_mirrors(query, mirrors):
     """One pass over the mirrors -> (payload or None, whether retrying could help)."""
-    retry_min_delay_s = env_float("OVERPASS_RETRY_MIN_DELAY_S", 0.5)
-    retry_max_delay_s = env_float("OVERPASS_RETRY_MAX_DELAY_S", 1.5)
+    settings = get_settings()
+    retry_min_delay_s = settings.overpass_retry_min_delay_s
+    retry_max_delay_s = settings.overpass_retry_max_delay_s
     # Short connect timeout so a dead mirror fails fast; generous read timeout for big queries.
-    timeout = (
-        env_float("OVERPASS_CONNECT_TIMEOUT_S", 10),
-        env_float("OVERPASS_READ_TIMEOUT_S", 100),
-    )
+    timeout = (settings.overpass_connect_timeout_s, settings.overpass_read_timeout_s)
 
     for index, url in enumerate(mirrors):
         mirror_start = time.perf_counter()
@@ -337,7 +308,7 @@ def build_site_summaries(elements, origin_coordinate=None):
     if not elements:
         return []
 
-    hazard_radius_m = env_int("MIN_DISTANCE_TO_HAZARD", 150)
+    hazard_radius_m = get_settings().min_distance_to_hazard_m
     target_sites = []
     red_flags = []
 
@@ -636,32 +607,25 @@ def get_chat_client():
     Return (client, model): local Ollama when LOCAL_LLM_ENABLED (default), otherwise Gemini
     when GEMINI_API_KEY is set, otherwise (None, None).
     """
-    timeout_s = env_float("LLM_TIMEOUT_S", 120)
-    local_enabled = os.getenv("LOCAL_LLM_ENABLED", "true").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if local_enabled:
-        model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    settings = get_settings()
+    if settings.local_llm_enabled:
+        model = settings.ollama_model
         logger.info(f"Using local Ollama model '{model}'.")
         client = OpenAI(
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-            api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
-            timeout=timeout_s,
+            base_url=settings.ollama_base_url,
+            api_key=settings.ollama_api_key,
+            timeout=settings.llm_timeout_s,
             max_retries=1,
         )
         return client, model
 
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if gemini_api_key:
-        model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    if settings.gemini_api_key:
+        model = settings.gemini_model
         logger.info(f"Using Gemini model '{model}'.")
         client = OpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            api_key=gemini_api_key,
-            timeout=timeout_s,
+            api_key=settings.gemini_api_key,
+            timeout=settings.llm_timeout_s,
             max_retries=1,
         )
         return client, model

@@ -3,28 +3,27 @@ from pathlib import Path
 
 import pytest
 
+import config
 import scout
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(autouse=True)
-def isolate_env(monkeypatch):
+def isolate_env(monkeypatch, tmp_path):
     """Tests must never depend on the developer's server/.env or hit the network."""
-    for name in (
-        "LOCAL_LLM_ENABLED",
-        "GEMINI_API_KEY",
-        "OLLAMA_MODEL",
-        "GEMINI_MODEL",
-        "LLM_CANDIDATE_POOL_SIZE",
-        "MIN_DISTANCE_TO_HAZARD",
-        "OVERPASS_URLS",
-        "LOG_LEVEL",
-    ):
+    for name in config.ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(
         "LOCAL_LLM_ENABLED", "false"
     )  # no LLM unless a test provides one
+    # If DEBUG logging is on, Overpass queries are logged to this file: keep it out of the repo.
+    monkeypatch.setenv(
+        "OVERPASS_QUERY_DEBUG_FILE", str(tmp_path / "overpass_debug.txt")
+    )
+    # Read settings fresh on every call so tests can change the environment mid-test.
+    monkeypatch.setattr(scout, "get_settings", config.Settings.from_env)
+    config.get_settings.cache_clear()
     monkeypatch.setattr(scout.time, "sleep", lambda _seconds: None)
 
     def no_network(*args, **kwargs):

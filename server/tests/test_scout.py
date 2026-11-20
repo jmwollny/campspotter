@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from conftest import node, way
 
+import config
 import scout
 
 ORIGIN = (51.0, -1.0)
@@ -394,7 +395,7 @@ def test_get_chat_client_selection(monkeypatch):
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     client, model = scout.get_chat_client()
-    assert model == scout.DEFAULT_GEMINI_MODEL and "googleapis" in str(client.base_url)
+    assert model == config.DEFAULT_GEMINI_MODEL and "googleapis" in str(client.base_url)
 
 
 # --------------------------------------------------------------------------- #
