@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    /**
+     * svelte-preprocess cannot figure out whether you have a value or a type,
+     * so tell TypeScript to enforce using `import type` instead of `import` for types.
+     */
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    /**
+     * Step 10 of the refactor converts src/ to TypeScript. Until then the
+     * existing JavaScript (and JS in .svelte files) is type-checked too.
+     */
+    "allowJs": true,
+    "checkJs": true,
+    /**
+     * TypeScript 6 turns strict mode on by default. Keep it off while the code is
+     * still JavaScript; step 10 turns it on as the files become TypeScript.
+     */
+    "strict": false
+  },
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
+}

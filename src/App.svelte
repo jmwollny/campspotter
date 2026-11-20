@@ -489,7 +489,7 @@
         </label>
         <p class="hint">
           or try
-          {#each SAMPLE_ROUTES as sample, i}
+          {#each SAMPLE_ROUTES as sample, i (sample.file)}
             {#if i > 0}&nbsp;or&nbsp;{/if}<button
               type="button"
               class="link-button"

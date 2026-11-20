@@ -77,6 +77,8 @@ it and see its details, including a link to it on OpenStreetMap.
 
 ```bash
 npm test                          # front-end unit tests (Vitest)
+npm run check                     # type check (svelte-check + TypeScript)
+npm run lint                      # lint (ESLint)
 cd server && uv run pytest        # back-end tests (pytest)
 npm run build                     # production build into dist/
 ```
