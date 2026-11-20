@@ -81,12 +81,20 @@ motion.
 ## Development
 
 ```bash
-npm test                          # front-end unit tests (Vitest)
+npm test                          # front-end tests (Vitest + Svelte Testing Library)
 npm run check                     # type check (svelte-check + TypeScript)
 npm run lint                      # lint (ESLint)
-cd server && uv run pytest        # back-end tests (pytest)
 npm run build                     # production build into dist/
+
+cd server
+uv run pytest                     # back-end tests (pytest)
+uv run ruff check . && uv run ruff format .   # lint and format
+uv run mypy                       # type check
 ```
+
+Front-end code lives in `src/`: state and actions in `lib/stores.ts`, the websocket client in
+`lib/searchClient.ts`, all Mapbox code in `lib/map/`, and the UI in `components/`. The server's layout is
+described in [`server/README.md`](server/README.md).
 
 The back-end tests never touch the network. They use a captured Overpass response in
 `server/tests/fixtures`, plus fakes for the LLM.
