@@ -29,3 +29,4 @@ dist-ssr
 __pycache__/
 *.pyc
 server/overpass_query_log.txt
+.pytest_cache/

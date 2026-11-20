@@ -6,9 +6,20 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.118.3",
-    "gpxpy>=1.6.0",
     "openai>=1.68.2",
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
-    "uvicorn>=0.37.0",
+    # [standard] brings the websockets library; without it uvicorn rejects /ws/analyze with a 404.
+    "uvicorn[standard]>=0.37.0",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-p no:anyio"  # silence a deprecation warning from anyio's plugin; no async tests here
