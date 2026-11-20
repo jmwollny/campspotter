@@ -13,18 +13,15 @@ from llm_client import (
     parse_json_object_from_text,
 )
 from models import SiteRecord
+from prompts import (
+    CRITERIA_PROMPT,
+    DEFAULT_CRITERIA,
+    SELECTION_SYSTEM_TEMPLATE,
+    SELECTION_USER_TEMPLATE,
+)
 from summarise import count_red_flags_by_type
 
 logger = logging.getLogger(__name__)
-
-
-DEFAULT_CRITERIA = (
-    "1. Flat, even ground for comfortable sleeping and stable pitching. "
-    "2. Proximity to a water source (rivers or lakes) for drinking and cooking. "
-    "3. Natural shelter from wind, such as bushes, depressions, or treelines. "
-    "4. Visual concealment from roads, trails, and nearby dwellings. "
-    "5. Distance from livestock to avoid noise, mess, and curiosity."
-)
 
 
 def heuristic_score(site: SiteRecord) -> float:
@@ -90,14 +87,9 @@ def to_score(value: Any) -> float | None:
 
 def get_camping_criteria() -> str:
     """Ask the LLM for wild camping criteria; fall back to a fixed list on any failure."""
-    message = (
-        "What is the criteria for a good overnight wild camping spot? Make a bulleted list with no "
-        "other text. Ignore any legal considerations because the intention is to arrive late, leave "
-        "early and leave no trace."
-    )
     try:
         content = complete(
-            [{"role": "user", "content": message}], purpose="criteria"
+            [{"role": "user", "content": CRITERIA_PROMPT}], purpose="criteria"
         ).strip()
     except LLMUnavailable:
         return DEFAULT_CRITERIA
@@ -138,22 +130,13 @@ def score_and_select_sites(
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "content": (
-                "You are evaluating wild camping suitability. "
-                f"Use this wild camping criteria to help select the best sites: {criteria}\n"
-                "Prefer discreet terrain (wood/forest/scrub) away from red flags such as buildings. "
-                "Return valid JSON only."
-            ),
+            "content": SELECTION_SYSTEM_TEMPLATE.format(criteria=criteria),
         },
         {
             "role": "user",
-            "content": (
-                f"Evaluate these candidate sites and pick up to {max_candidates} ids that should receive "
-                "detailed geometry refinement.\n"
-                "Schema: keys: selected_ids (array of ids), evaluations. evaluations is an array of objects "
-                "with these keys - id, suitability_score (range 0-100), reason.\n"
-                f"Candidate sites: {json.dumps(prompt_payload)}\n"
-                "Return JSON only"
+            "content": SELECTION_USER_TEMPLATE.format(
+                max_candidates=max_candidates,
+                candidates_json=json.dumps(prompt_payload),
             ),
         },
     ]

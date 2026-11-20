@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import prompts
 import select_sites
 from tests.conftest import FakeLLM, use_llm
 
@@ -133,8 +134,8 @@ def test_select_with_no_sites_returns_empty(monkeypatch):
 
 def test_criteria_falls_back_on_error_and_empty_reply(monkeypatch):
     use_llm(monkeypatch, FakeLLM(error=TimeoutError()))
-    assert select_sites.get_camping_criteria() == select_sites.DEFAULT_CRITERIA
+    assert select_sites.get_camping_criteria() == prompts.DEFAULT_CRITERIA
     use_llm(monkeypatch, FakeLLM("   "))
-    assert select_sites.get_camping_criteria() == select_sites.DEFAULT_CRITERIA
+    assert select_sites.get_camping_criteria() == prompts.DEFAULT_CRITERIA
     use_llm(monkeypatch, FakeLLM("- flat ground"))
     assert select_sites.get_camping_criteria() == "- flat ground"

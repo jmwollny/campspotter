@@ -1,0 +1,18 @@
+[
+ [
+  {
+   "role": "user",
+   "content": "What is the criteria for a good overnight wild camping spot? Make a bulleted list with no other text. Ignore any legal considerations because the intention is to arrive late, leave early and leave no trace."
+  }
+ ],
+ [
+  {
+   "role": "system",
+   "content": "You are evaluating wild camping suitability. Use this wild camping criteria to help select the best sites: CRITERIA TEXT\nPrefer discreet terrain (wood/forest/scrub) away from red flags such as buildings. Return valid JSON only."
+  },
+  {
+   "role": "user",
+   "content": "Evaluate these candidate sites and pick up to 3 ids that should receive detailed geometry refinement.\nSchema: keys: selected_ids (array of ids), evaluations. evaluations is an array of objects with these keys - id, suitability_score (range 0-100), reason.\nCandidate sites: [{\"id\": 1530075703, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 913.6, \"distance_to_origin_m\": 1.1, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 1, \"RESIDENTIAL\": 1}}, {\"id\": 1530075706, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 10945.3, \"distance_to_origin_m\": 53.5, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 1, \"RESIDENTIAL\": 1}}, {\"id\": 1530075700, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 5257.1, \"distance_to_origin_m\": 76.5, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"RESIDENTIAL\": 1, \"BUILDING\": 1}}, {\"id\": 1530075705, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 1034.2, \"distance_to_origin_m\": 128.5, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {}}, {\"id\": 1530075704, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 1504.4, \"distance_to_origin_m\": 190.0, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 11}}, {\"id\": 1530080090, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 20712.2, \"distance_to_origin_m\": 301.2, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 5}}, {\"id\": 1530075692, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 1271.1, \"distance_to_origin_m\": 347.1, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 42, \"FARMYARD\": 1, \"BARRIER\": 3}}, {\"id\": 1530075710, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 10632.6, \"distance_to_origin_m\": 382.3, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 6}}, {\"id\": 1530080089, \"type\": \"way\", \"terrain_description\": \"natural:wood, name:The Moors\", \"area_m2\": 80117.5, \"distance_to_origin_m\": 526.7, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 7}}, {\"id\": 1530042093, \"type\": \"way\", \"terrain_description\": \"natural:wood\", \"area_m2\": 30905.0, \"distance_to_origin_m\": 766.5, \"distance_to_major_road_m\": null, \"distance_to_water_m\": null, \"nearby_red_flags\": {\"BUILDING\": 13, \"RESIDENTIAL\": 1, \"BARRIER\": 1}}]\nReturn JSON only"
+  }
+ ]
+]

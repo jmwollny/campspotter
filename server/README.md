@@ -18,6 +18,7 @@ The search runs in five stages, each in its own module with its own tests in `te
 | [`outline.py`](outline.py) | 5. Fetch full outlines for the chosen sites |
 | [`overpass.py`](overpass.py) | Overpass API client (mirrors, retries, backoff) |
 | [`llm_client.py`](llm_client.py) | The only module that talks to the LLM (Ollama or Gemini) |
+| [`prompts.py`](prompts.py) | Every prompt sent to the LLM (snapshot-tested in `tests/test_prompts.py`) |
 | [`geo.py`](geo.py) | Distance, area and bounding-box maths |
 | [`models.py`](models.py) | Pydantic models for the request, sites and websocket messages |
 | [`config.py`](config.py) | Settings from environment variables / `.env` |
