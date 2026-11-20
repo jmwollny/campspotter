@@ -54,11 +54,11 @@
   export const endScrub = () => controller?.endScrub(get(origin));
 </script>
 
-<div class="map-wrap">
+<section class="map-wrap" aria-label="Route map">
   <div class="map" bind:this={container}></div>
   {#if error}
     <div class="map-overlay error-text" role="alert">{error}</div>
   {:else if !$route}
     <div class="map-overlay">Load a GPX route to get started.</div>
   {/if}
-</div>
+</section>

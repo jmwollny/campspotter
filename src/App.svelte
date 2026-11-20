@@ -56,16 +56,18 @@
   }
 </script>
 
+<a class="skip-link" href="#controls">Skip to route and search</a>
+
 <div class="app">
   <header class="app-header">
     <h1>Campspotter</h1>
     <p>Find quiet woodland for a wild camp along your route.</p>
   </header>
 
-  <div class="layout">
+  <main class="layout">
     <MapView bind:this={mapView} accessToken={mapboxToken} on:siteclick={handleMapClick} />
 
-    <aside class="panel">
+    <section id="controls" class="panel" aria-label="Route, search and results" tabindex="-1">
       <RoutePicker on:loaded={routeLoaded} />
       <SearchControls
         on:scrubstart={() => mapView.beginScrub()}
@@ -74,6 +76,6 @@
         on:search={startSearch}
       />
       <SiteList bind:this={siteList} on:select={(event) => showSite(event.detail, "list")} />
-    </aside>
-  </div>
+    </section>
+  </main>
 </div>

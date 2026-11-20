@@ -30,8 +30,8 @@ beforeEach(() => resetState());
 
 describe("SiteCard", () => {
   it("shows the site's name, details, score and reason", () => {
-    render(SiteCard, { site: SITE, rank: 2, topPick: true });
-    const card = screen.getByRole("button");
+    render(SiteCard, { site: { ...SITE, distance_to_major_road_m: 1200 }, rank: 2, topPick: true });
+    const card = screen.getByRole("button", { name: /^2\s*Top pick\s*Foxley Copse\s*score 76%$/ });
     expect(card.textContent).toContain("Foxley Copse");
     expect(card.textContent).toContain("Wood");
     expect(card.textContent).toContain("Top pick");
@@ -40,16 +40,22 @@ describe("SiteCard", () => {
     expect(card.textContent).toContain("Nearby: 1 building");
     expect(card.textContent).toContain("76%");
     expect(card.textContent).toContain("“Large and away from roads”");
-    expect(screen.getByLabelText("Rank 2")).toBeTruthy();
     expect(card.getAttribute("aria-pressed")).toBe("false");
+    // The details are the button's description, including the road distance the popup shows.
+    const details = document.getElementById(card.getAttribute("aria-describedby")!);
+    expect(details?.textContent).toContain("527\u00a0m from route");
+    expect(details?.textContent).toContain("major road 1.2\u00a0km");
+    expect(details?.textContent).toContain("Nearby: 1 building");
   });
 
   it("shows a spinner while scoring, and a dash for a missing score afterwards", () => {
     const unscored = { ...SITE, suitability_score: undefined };
     const { component } = render(SiteCard, { site: unscored, rank: 1, scoring: true });
-    expect(screen.getByLabelText("Scoring")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^1\s*Foxley Copse\s*scoring$/ })).toBeTruthy();
     component.$set({ scoring: false });
-    return Promise.resolve().then(() => expect(screen.getByRole("button").textContent).toContain("–"));
+    return Promise.resolve().then(() =>
+      expect(screen.getByRole("button", { name: /^1\s*Foxley Copse\s*score –$/ })).toBeTruthy(),
+    );
   });
 
   it("hides the heuristic placeholder reason", () => {

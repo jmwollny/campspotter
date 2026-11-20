@@ -19,6 +19,12 @@ export interface MapCallbacks {
 
 const INITIAL_VIEW = { center: [-1.6, 51.2] as [number, number], zoom: 7 };
 
+/** Animation length, or 0 if the user asked the system to reduce motion. */
+function duration(ms: number): number {
+  const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduce ? 0 : ms;
+}
+
 export class MapController {
   private readonly map: mapboxgl.Map;
   private readonly marker = new mapboxgl.Marker({ color: ROUTE_COLOR });
@@ -80,25 +86,27 @@ export class MapController {
       return;
     }
     const bounds = routeBounds(track);
-    if (bounds) this.map.fitBounds(bounds, { padding: 50, duration: 800 });
+    if (bounds) this.map.fitBounds(bounds, { padding: 50, duration: duration(800) });
   }
 
   fitToResults(origin: LatLon | null, sites: Site[], topPicks: ReadonlySet<number>): void {
     const bounds = origin ? resultsBounds(origin, sites, topPicks) : null;
-    if (bounds) this.map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
+    if (bounds) this.map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: duration(800) });
   }
 
   /** Open the site's popup; optionally zoom to the site's outline. */
   showSite(site: Site, rank: number, { zoom = true }: { zoom?: boolean } = {}): void {
     this.clearPopup();
-    this.popup = new mapboxgl.Popup({ maxWidth: "280px", offset: 10 })
+    // focusAfterOpen: false keeps keyboard focus on the list card (or map) the user is on;
+    // the card already carries the popup's details for screen readers.
+    this.popup = new mapboxgl.Popup({ maxWidth: "280px", offset: 10, focusAfterOpen: false })
       .setLngLat([site.lon, site.lat])
       .setHTML(popupHtml(site, rank))
       .addTo(this.map);
     if (!zoom) return;
     const bounds = siteBounds(site);
-    if (bounds) this.map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 700 });
-    else this.map.easeTo({ center: [site.lon, site.lat], zoom: 16, duration: 700 });
+    if (bounds) this.map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: duration(700) });
+    else this.map.easeTo({ center: [site.lon, site.lat], zoom: 16, duration: duration(700) });
   }
 
   clearPopup(): void {
@@ -114,7 +122,7 @@ export class MapController {
     this.map.flyTo({
       center: [point.lon, point.lat],
       zoom: Math.max(this.zoomBeforeScrub, 12),
-      duration: 300,
+      duration: duration(300),
     });
   }
 
@@ -125,7 +133,7 @@ export class MapController {
   endScrub(point: LatLon | null): void {
     // Only zoom back out if the drag started with the pointer (keyboard changes never zoomed in).
     if (point && this.zoomBeforeScrub != null) {
-      this.map.flyTo({ center: [point.lon, point.lat], zoom: this.zoomBeforeScrub, duration: 800 });
+      this.map.flyTo({ center: [point.lon, point.lat], zoom: this.zoomBeforeScrub, duration: duration(800) });
     }
     this.zoomBeforeScrub = null;
   }

@@ -22,9 +22,9 @@
 </script>
 
 {#if $sites.length}
-  <section class="panel-section results">
-    <h2>3. Candidate sites <span class="count">{$sites.length}</span></h2>
-    <p class="legend">
+  <section class="panel-section results" aria-labelledby="results-heading">
+    <h2 id="results-heading">3. Candidate sites <span class="count">{$sites.length}</span></h2>
+    <p class="legend" aria-hidden="true">
       <span><i style="background:{TOP_PICK_COLOR}"></i>Top pick</span>
       <span><i style="background:{OTHER_SITE_COLOR}"></i>Other woodland</span>
     </p>
@@ -39,6 +39,14 @@
             scoring={$searching}
             on:select={(event) => dispatch("select", event.detail)}
           />
+          {#if site.id === $selectedSiteId}
+            <a
+              class="osm-link"
+              href="https://www.openstreetmap.org/{site.type}/{site.id}"
+              target="_blank"
+              rel="noopener noreferrer">View on OpenStreetMap<span class="visually-hidden"> (opens in a new tab)</span> ↗</a
+            >
+          {/if}
         </li>
       {/each}
     </ol>

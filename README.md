@@ -69,6 +69,11 @@ Results stream in as each stage finishes:
 Top picks are shown in green and numbered on the map. Click a site in the list or on the map to zoom to
 it and see its details, including a link to it on OpenStreetMap.
 
+Everything works from the keyboard and with a screen reader: a "Skip to route and search" link jumps
+past the map's controls, the sliders announce their values with units, and each site in the list
+carries the same details as its map popup. Map animations are skipped if your system asks to reduce
+motion.
+
 ![Choosing a point on the route](docs/screenshot-route.png)
 
 ![A selected site](docs/screenshot-selected.png)

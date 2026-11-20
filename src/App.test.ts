@@ -94,6 +94,17 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("accessibility", () => {
+  it("has a main landmark, a labelled map and panel, and a skip link to the controls", async () => {
+    await renderApp();
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Route map" })).toBeTruthy();
+    const panel = screen.getByRole("region", { name: "Route, search and results" });
+    const skip = screen.getByRole("link", { name: "Skip to route and search" });
+    expect(skip.getAttribute("href")).toBe(`#${panel.id}`);
+  });
+});
+
 describe("getting started", () => {
   it("asks for a route and hides the search until there is one", async () => {
     await renderApp();
@@ -174,7 +185,7 @@ describe("searching", () => {
     socket.receive({ type: "status", msg: "Retrieving data from OpenStreetMap..." });
     socket.receive({ type: "batch", sites: [site(1), site(2), site(3)] });
     expect(await screen.findByText("3", { selector: ".count" })).toBeTruthy();
-    expect(screen.getAllByLabelText("Scoring")).toHaveLength(3); // spinners while scoring
+    expect(screen.getAllByRole("button", { name: /scoring$/ })).toHaveLength(3); // still scoring
 
     socket.receive({
       type: "final",
@@ -192,7 +203,13 @@ describe("searching", () => {
       expect(screen.getByRole("status").textContent).toContain("Analysis complete (heuristic scores"),
     );
     const cards = within(screen.getByRole("list")).getAllByRole("button");
-    expect(cards.map((card) => card.querySelector(".rank")?.textContent)).toEqual(["1", "2", "3"]);
+    const names = cards.map((card) => card.textContent?.replace(/\s+/g, " ").trim());
+    expect(names.map((name) => name?.match(/^(\d+) (Top pick )?Wood/)?.[0])).toEqual([
+      "1 Top pick Wood",
+      "2 Wood",
+      "3 Wood",
+    ]);
+    expect(screen.getByRole("button", { name: /^1\s*Top pick\s*Wood\s*score 85%$/ })).toBeTruthy();
     expect(cards[0].textContent).toContain("Top pick");
     expect(cards[0].textContent).toContain("85%");
     expect(cards[0].textContent).toContain("“Big and quiet”");
@@ -252,6 +269,12 @@ describe("selecting a site", () => {
 
     expect(card.getAttribute("aria-pressed")).toBe("true");
     expect(FakePopup.instances.at(-1)?.html).toContain("1. The Moors");
+    // Keyboard focus stays on the card instead of jumping into the map popup.
+    expect(FakePopup.instances.at(-1)?.options).toMatchObject({ focusAfterOpen: false });
+    // The popup's OpenStreetMap link is also in the list, for people not using the map.
+    expect(screen.getByRole("link", { name: /view on openstreetmap/i }).getAttribute("href")).toBe(
+      "https://www.openstreetmap.org/way/1",
+    );
     expect(map.called("fitBounds").length + map.called("easeTo").length).toBe(zoomsBefore + 1);
     expect(map.features("selected-shape")).toHaveLength(0); // no bounds or outline for this site
   });
@@ -267,6 +290,14 @@ describe("selecting a site", () => {
     expect(pressed.querySelector(".rank")?.textContent).toBe("2");
     await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
     expect(FakePopup.instances.at(-1)?.html).toContain("2. Wood");
+  });
+
+  it("skips map animations when the user prefers reduced motion", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduce") }));
+    const { user, map } = await withResults();
+    await user.click(screen.getByRole("button", { name: /the moors/i }));
+    const lastZoom = map.called("easeTo").at(-1) ?? map.called("fitBounds").at(-1);
+    expect(JSON.stringify(lastZoom)).toContain('"duration":0');
   });
 
   it("moving the search point clears the results and the popup", async () => {
